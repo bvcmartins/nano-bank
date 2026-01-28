@@ -1,0 +1,62 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: db-init-scripts
+  namespace: nano-bank
+data:
+  init-db.sh: |
+    #!/bin/bash
+    set -e
+
+    echo "Waiting for PostgreSQL to be ready..."
+    until pg_isready -h postgres-service -p 5432 -U nanobank_user -d nano_bank_db; do
+      echo "Waiting for database..."
+      sleep 2
+    done
+
+    echo "PostgreSQL is ready. Initializing nano bank schema..."
+
+    # Execute DDL scripts in order
+    psql -h postgres-service -U nanobank_user -d nano_bank_db -f /scripts/00_init.sql
+    psql -h postgres-service -U nanobank_user -d nano_bank_db -f /scripts/01_enums.sql
+    psql -h postgres-service -U nanobank_user -d nano_bank_db -f /scripts/02_customers.sql
+    psql -h postgres-service -U nanobank_user -d nano_bank_db -f /scripts/03_accounts.sql
+    psql -h postgres-service -U nanobank_user -d nano_bank_db -f /scripts/04_transactions.sql
+    psql -h postgres-service -U nanobank_user -d nano_bank_db -f /scripts/05_security.sql
+    psql -h postgres-service -U nanobank_user -d nano_bank_db -f /scripts/06_triggers.sql
+
+    echo "Database initialization complete!"
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: init-db
+  namespace: nano-bank
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: init-db
+        image: postgres:16-alpine
+        command: ["/bin/bash", "/init-scripts/init-db.sh"]
+        env:
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: password
+        volumeMounts:
+        - name: init-scripts
+          mountPath: /init-scripts
+        - name: sql-scripts
+          mountPath: /scripts
+      volumes:
+      - name: init-scripts
+        configMap:
+          name: db-init-scripts
+          defaultMode: 0755
+      - name: sql-scripts
+        configMap:
+          name: sql-scripts

@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+  namespace: nano-bank
+  labels:
+    app: postgres
+    tier: database
+spec:
+  type: ClusterIP
+  ports:
+  - port: 5432
+    targetPort: 5432
+    protocol: TCP
+    name: postgres
+  selector:
+    app: postgres
+    tier: database
+
+---
+# NodePort service for external access during development
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-nodeport
+  namespace: nano-bank
+  labels:
+    app: postgres
+    tier: database
+spec:
+  type: NodePort
+  ports:
+  - port: 5432
+    targetPort: 5432
+    nodePort: 30432
+    protocol: TCP
+    name: postgres
+  selector:
+    app: postgres
+    tier: database
