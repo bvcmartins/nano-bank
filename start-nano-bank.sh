@@ -51,7 +51,7 @@ echo "✅ API server starting (PID: $API_PID)"
 echo ""
 echo "⏳ Waiting for API to be ready..."
 for i in {1..30}; do
-    if curl -s http://localhost:8080/health > /dev/null 2>&1; then
+    if curl -s http://localhost:8081/health > /dev/null 2>&1; then
         echo "✅ API is ready!"
         break
     fi
@@ -62,9 +62,9 @@ echo ""
 echo "🎉 Nano Bank is now running!"
 echo ""
 echo "📊 Service URLs:"
-echo "  • API Server:      http://localhost:8080"
-echo "  • Health Check:    http://localhost:8080/health"
-echo "  • API Docs:        http://localhost:8080/docs"
+echo "  • API Server:      http://localhost:8081"
+echo "  • Health Check:    http://localhost:8081/health"
+echo "  • API Docs:        http://localhost:8081/docs"
 echo "  • PostgreSQL:      localhost:5432"
 echo ""
 echo "📝 Process IDs:"

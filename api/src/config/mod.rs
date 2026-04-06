@@ -75,11 +75,16 @@ impl Settings {
     }
 
     pub fn database_url(&self) -> String {
+        let host = if self.database.host.contains(':') {
+            format!("[{}]", self.database.host)
+        } else {
+            self.database.host.clone()
+        };
         format!(
             "postgresql://{}:{}@{}:{}/{}?sslmode=disable",
             self.database.username,
             self.database.password,
-            self.database.host,
+            host,
             self.database.port,
             self.database.database_name
         )
@@ -105,7 +110,7 @@ impl Default for Settings {
             },
             server: ServerSettings {
                 host: "0.0.0.0".to_string(),
-                port: 8080,
+                port: 8081,
                 workers: None,
                 keep_alive: 60,
             },
