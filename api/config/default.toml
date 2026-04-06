@@ -1,0 +1,31 @@
+[database]
+host = "127.0.0.1"
+port = 5432
+username = "nanobank_user"
+password = "secure_nano_password_2024!"
+database_name = "nano_bank_db"
+max_connections = 10
+min_connections = 1
+acquire_timeout = 30
+
+[server]
+host = "0.0.0.0"
+port = 8080
+keep_alive = 60
+
+[jwt]
+secret = "your-super-secret-jwt-key-change-this-in-production"
+expires_in = 3600
+refresh_expires_in = 604800
+issuer = "nano-bank"
+
+[security]
+password_min_length = 8
+max_login_attempts = 5
+lockout_duration = 900
+session_timeout = 86400
+require_mfa = false
+
+[logging]
+level = "info"
+format = "json"

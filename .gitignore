@@ -1,0 +1,21 @@
+# Rust build artifacts
+api/target/
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Runtime logs
+*.log
+/tmp/nano-bank-*.log
+
+# Environment / secrets (if added later)
+.env
+.env.*
