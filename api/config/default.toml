@@ -1,5 +1,5 @@
 [database]
-host = "127.0.0.1"
+host = "::1"
 port = 5432
 username = "nanobank_user"
 password = "secure_nano_password_2024!"
@@ -10,7 +10,7 @@ acquire_timeout = 30
 
 [server]
 host = "0.0.0.0"
-port = 8080
+port = 8081
 keep_alive = 60
 
 [jwt]

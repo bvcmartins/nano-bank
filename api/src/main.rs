@@ -64,6 +64,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
+    // Verify schema is in place
+    if let Err(e) = config::database::run_migrations(&pool).await {
+        warn!("❌ Migration check failed: {}", e);
+        std::process::exit(1);
+    }
+
     // Create application router
     let app = create_router(pool, &settings).await;
 
