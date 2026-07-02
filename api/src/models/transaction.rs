@@ -166,7 +166,7 @@ pub struct TransactionResponse {
 }
 
 // Transaction Entry Response
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransactionEntryResponse {
     pub entry_id: Uuid,
     pub account_id: Uuid,

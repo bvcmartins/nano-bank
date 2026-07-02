@@ -86,9 +86,10 @@ Implemented handlers (real SQL + logic):
 - `POST /api/v1/customers` — `handlers/customers.rs`
 - `POST /api/v1/accounts` — `handlers/accounts.rs`
 - `POST /api/v1/cards/authorize|capture|settle` — `handlers/cards.rs`
+- `POST /api/v1/transactions/deposit|withdrawal|transfer`, `GET /api/v1/transactions` — `handlers/transactions.rs`
 - `GET /health`, `GET /docs`
 
-Everything else (`auth`, `transactions`, `security`, GET endpoints for customers/accounts) returns a static `"... endpoint - TODO: implement"` string.
+Everything else (`auth`, `security`, GET endpoints for customers/accounts) returns a static `"... endpoint - TODO: implement"` string.
 
 ### Bruno collection
 
@@ -188,8 +189,14 @@ DB transaction, before commit — so if the core can't record it, the operation
 fails rather than letting the local subledger and the GL drift. `authorize` is
 local-only (a hold; no money moves).
 
-`transactions.rs` (deposit/transfer/withdrawal) is still stubbed and not yet
-routed through the port.
+`transactions.rs` (deposit/withdrawal/transfer + history) is implemented.
+Deposit and withdrawal move value across an internal **`EXTERNAL_CASH`** account
+(a chequing account under a synthetic `cash@nano.bank` customer, $1T overdraft)
+and post the aggregate effect through the port (deposit: debit `Bank` / credit
+`Payable`; withdrawal the reverse). A **transfer is local-only** — both customer
+accounts map to the same `Payable` GL role, so the net GL effect is zero. All
+three enforce balance/status/type checks and the `account_limits` counters, and
+update `daily_transaction_summaries`; transfer honors an `idempotency_key`.
 
 ## Gotchas
 
@@ -200,4 +207,4 @@ routed through the port.
 - Config is layered: `api/config/default.toml` plus env vars with prefix
   `NANO_BANK` and `__` as the separator (e.g. `NANO_BANK__SERVER__PORT=8082` to
   run a second instance alongside one already holding `:8081`).
-- Most non-card handlers (`auth`, `security`, `transactions`) are still stubs.
+- Remaining stub handlers: `auth`, `security` (and some GET endpoints).

@@ -136,3 +136,93 @@ GET {{baseUrl}}/api/v1/customers/profile?customer_id={{createCustomer.response.b
 Accept: application/json
 
 ###
+
+# ═════════════════════════════════════════════════════════════
+# TRANSACTIONS: deposit → transfer → withdrawal → history
+# Uses a fresh customer with two deposit accounts (chequing + savings).
+# Deposit/withdrawal post to the GL core — a core must be running.
+# ═════════════════════════════════════════════════════════════
+
+# @name txnCustomer
+POST {{baseUrl}}/api/v1/customers
+Content-Type: application/json
+
+{
+    "email": "txn.demo@example.com",
+    "phone_number": "4165550000",
+    "first_name": "Txn",
+    "last_name": "Demo",
+    "date_of_birth": "1990-05-15",
+    "sin": "123456780",
+    "password": "securepass123"
+}
+
+###
+
+# 11. Open chequing account A
+# @name acctA
+POST {{baseUrl}}/api/v1/accounts
+Content-Type: application/json
+
+{
+    "customer_id": "{{txnCustomer.response.body.customer_id}}",
+    "account_type": "chequing"
+}
+
+###
+
+# 12. Open savings account B
+# @name acctB
+POST {{baseUrl}}/api/v1/accounts
+Content-Type: application/json
+
+{
+    "customer_id": "{{txnCustomer.response.body.customer_id}}",
+    "account_type": "savings"
+}
+
+###
+
+# 13. Deposit 1000 into A  (customer credit / EXTERNAL_CASH debit; GL: Bank↔Payable)
+POST {{baseUrl}}/api/v1/transactions/deposit
+Content-Type: application/json
+
+{
+    "account_id": "{{acctA.response.body.account_id}}",
+    "amount": 1000.00,
+    "description": "Payday deposit"
+}
+
+###
+
+# 14. Transfer 400 from A to B  (local double-entry; no GL post)
+POST {{baseUrl}}/api/v1/transactions/transfer
+Content-Type: application/json
+
+{
+    "from_account_id": "{{acctA.response.body.account_id}}",
+    "to_account_id": "{{acctB.response.body.account_id}}",
+    "amount": 400.00,
+    "description": "Move to savings",
+    "idempotency_key": "demo-transfer-001"
+}
+
+###
+
+# 15. Withdraw 100 from A  (GL: Payable↔Bank; daily limit enforced)
+POST {{baseUrl}}/api/v1/transactions/withdrawal
+Content-Type: application/json
+
+{
+    "account_id": "{{acctA.response.body.account_id}}",
+    "amount": 100.00,
+    "description": "ATM withdrawal"
+}
+
+###
+
+# 16. Transaction history for account A (newest first, entries hydrated)
+GET {{baseUrl}}/api/v1/transactions?account_id={{acctA.response.body.account_id}}&limit=20
+Accept: application/json
+
+###

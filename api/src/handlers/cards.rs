@@ -126,13 +126,13 @@ async fn ensure_gl_account(
 // ---------------------------------------------------------------------------
 
 /// A reference number matching `^[A-Z0-9]{10,20}$`: `prefix` + 12 digits.
-fn reference_number(prefix: &str) -> String {
+pub(crate) fn reference_number(prefix: &str) -> String {
     let n = (Uuid::new_v4().as_u128() % 1_000_000_000_000) as u64;
     format!("{}{:012}", prefix, n)
 }
 
 /// Round to 2 dp (the schema rejects anything else) and reject non-positive.
-fn normalize_amount(amount: Decimal) -> Result<Decimal, AppError> {
+pub(crate) fn normalize_amount(amount: Decimal) -> Result<Decimal, AppError> {
     let amount = amount.round_dp(2);
     if amount <= Decimal::ZERO {
         return Err(AppError::BadRequest("amount must be positive".to_string()));
@@ -144,7 +144,7 @@ fn normalize_amount(amount: Decimal) -> Result<Decimal, AppError> {
 /// core) via the Ledger port. The per-card subledger is kept locally; this is the
 /// aggregate GL effect. A core failure is surfaced so the caller can fail the
 /// operation rather than let the GL drift.
-async fn post_gl_entry(
+pub(crate) async fn post_gl_entry(
     state: &AppState,
     reference: &str,
     description: &str,
@@ -529,13 +529,13 @@ async fn settle(
 // Low-level DB helpers
 // ---------------------------------------------------------------------------
 
-type Tx<'a> = sqlx::Transaction<'a, sqlx::Postgres>;
+pub(crate) type Tx<'a> = sqlx::Transaction<'a, sqlx::Postgres>;
 
 const ACCOUNT_COLUMNS: &str = "account_id, customer_id, account_number, account_type, currency, \
     balance, available_balance, status, interest_rate, overdraft_limit, minimum_balance, \
     created_at, updated_at, activated_at, closed_at";
 
-async fn fetch_account_for_update(tx: &mut Tx<'_>, account_id: Uuid) -> Result<Option<Account>, sqlx::Error> {
+pub(crate) async fn fetch_account_for_update(tx: &mut Tx<'_>, account_id: Uuid) -> Result<Option<Account>, sqlx::Error> {
     sqlx::query_as::<_, Account>(&format!(
         "SELECT {ACCOUNT_COLUMNS} FROM accounts WHERE account_id = $1 FOR UPDATE"
     ))
@@ -547,7 +547,7 @@ async fn fetch_account_for_update(tx: &mut Tx<'_>, account_id: Uuid) -> Result<O
 /// Insert both legs of a transaction in one statement, so the balance triggers
 /// fire with a balanced set. The BEFORE-INSERT trigger fills in balance_before/
 /// after and updates each account's balance; we pass 0 placeholders.
-async fn post_two_legged(
+pub(crate) async fn post_two_legged(
     tx: &mut Tx<'_>,
     transaction_id: Uuid,
     account_a: Uuid,

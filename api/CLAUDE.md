@@ -18,7 +18,9 @@ the big picture (the kernel split and the two cores).
     with company code `1000`, and **truncates `bktxt` to 25 / `xblnr` to 16**
     chars to respect the legacy field widths.
 - `src/handlers/` — axum handlers. `ledger.rs` is the wired journal flow;
-  `cards.rs` is the card rails; the rest are mostly stubs.
+  `cards.rs` is the card rails; `transactions.rs` is deposit/withdrawal/transfer
+  + history (deposit/withdrawal post to the core, transfer is local-only; it
+  reuses the posting helpers from `cards.rs`); the rest are mostly stubs.
 - `src/errors/mod.rs` — `AppError` → HTTP. Includes `Upstream { status, message }`
   used to **preserve a core's status** when proxying (see below).
 - `src/config/`, `src/models/`, `src/middleware/`, `src/repositories/`,
