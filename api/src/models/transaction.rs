@@ -96,6 +96,9 @@ pub struct DepositRequest {
     pub description: String,
 
     pub external_reference: Option<String>,
+
+    // Optional idempotency key to dedupe retried deposits.
+    pub idempotency_key: Option<String>,
 }
 
 // Withdrawal Request
@@ -109,6 +112,16 @@ pub struct WithdrawalRequest {
     pub description: String,
 
     pub external_reference: Option<String>,
+
+    // Optional idempotency key to dedupe retried withdrawals.
+    pub idempotency_key: Option<String>,
+}
+
+// Transaction reversal request
+#[derive(Debug, Serialize, Deserialize, Validate)]
+pub struct ReverseRequest {
+    #[validate(length(min = 1, max = 500))]
+    pub reason: String,
 }
 
 // Transaction Reversal Entity

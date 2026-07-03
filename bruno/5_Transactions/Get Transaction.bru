@@ -1,0 +1,15 @@
+meta {
+  name: Get Transaction
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{baseUrl}}/api/v1/transactions/{{depositTxnId}}
+  auth: inherit
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

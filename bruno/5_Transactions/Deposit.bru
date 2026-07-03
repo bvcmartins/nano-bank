@@ -18,6 +18,10 @@ body:json {
   }
 }
 
+script:post-response {
+  bru.setEnvVar("depositTxnId", res.body.transaction_id);
+}
+
 settings {
   encodeUrl: true
   timeout: 0

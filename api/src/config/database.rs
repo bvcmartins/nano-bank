@@ -72,6 +72,22 @@ pub async fn run_migrations(pool: &DatabasePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    // Idempotency keys for money movement (dedupe retried deposit/withdrawal/
+    // transfer). Canonical DDL also in src/core/tables/04_transactions.sql.
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS idempotency_keys (
+            customer_id UUID NOT NULL REFERENCES customers(customer_id) ON DELETE CASCADE,
+            idempotency_key VARCHAR(255) NOT NULL,
+            transaction_id UUID NOT NULL REFERENCES transactions(transaction_id) ON DELETE CASCADE,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+            PRIMARY KEY (customer_id, idempotency_key)
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 

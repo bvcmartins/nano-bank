@@ -209,6 +209,7 @@ Authorization: Bearer {{accessToken}}
 ###
 
 # 11c. Deposit $100 into chequing.
+# @name deposit
 POST {{baseUrl}}/api/v1/transactions/deposit
 Content-Type: application/json
 Authorization: Bearer {{accessToken}}
@@ -252,6 +253,39 @@ Authorization: Bearer {{accessToken}}
 GET {{baseUrl}}/api/v1/transactions?limit=20
 Accept: application/json
 Authorization: Bearer {{accessToken}}
+
+###
+
+# 11g. Get a single transaction (the deposit from 11c).
+GET {{baseUrl}}/api/v1/transactions/{{deposit.response.body.transaction_id}}
+Accept: application/json
+Authorization: Bearer {{accessToken}}
+
+###
+
+# 11h. Idempotent deposit — send the SAME idempotency_key twice: the second
+#      call returns the original transaction (200), no double-post.
+POST {{baseUrl}}/api/v1/transactions/deposit
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+    "account_id": "{{openChequing.response.body.account_id}}",
+    "amount": 10.00,
+    "description": "Idempotent deposit",
+    "idempotency_key": "demo-key-12345"
+}
+
+###
+
+# 11i. Reverse the deposit from 11c (claws the $100 back). Original -> reversed.
+POST {{baseUrl}}/api/v1/transactions/{{deposit.response.body.transaction_id}}/reverse
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+    "reason": "customer dispute"
+}
 
 ###
 
