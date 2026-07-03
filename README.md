@@ -8,8 +8,9 @@ PostgreSQL** schema, running on a local **Kind (Kubernetes-in-Docker)** cluster.
 
 > [!WARNING]
 > This is a learning/experimental project — **not** for handling real money.
-> The database schema is substantial and the infrastructure works, but most API
-> handlers are still stubs (they return `"... endpoint - TODO: implement"`).
+> The database schema is substantial and the infrastructure works; auth,
+> customers, accounts, cards, and money movement are implemented, with a few
+> handlers (profile update, KYC upload, `/security/*`) still stubbed.
 > Default credentials and the JWT secret are committed in plaintext for local
 > dev convenience. Don't deploy this anywhere real.
 
@@ -67,8 +68,9 @@ of record, while nano-bank keeps the subledger that enforces credit limits. The
 GL post happens inside the capture/settle transaction, so if the core can't
 record it the operation fails rather than letting the ledger drift.
 
-`transactions.rs` (deposit/transfer/withdrawal) is still stubbed and not yet
-routed through the port.
+`transactions.rs` (deposit/withdrawal/transfer, plus reversals) is implemented
+and dual-posts through the Ledger port too — the local subledger plus the
+aggregate GL to the core, with a 503 + rollback if the core is down.
 
 | Component | Tech |
 |-----------|------|
@@ -87,10 +89,12 @@ nano-bank/
 │   ├── src/
 │   │   ├── main.rs          # router, middleware (CORS, compression, timeout), startup
 │   │   ├── config/          # settings + database pool / health check / migration check
-│   │   ├── handlers/        # route handlers: auth, customers, accounts, transactions,
-│   │   │                    #   security, health, docs  (mostly TODO stubs)
+│   │   ├── handlers/        # route handlers: auth, customers, accounts, cards,
+│   │   │                    #   transactions, ledger, health, docs (security still stub)
 │   │   ├── models/          # domain models (customer, account, transaction, security)
-│   │   ├── middleware/  errors/  repositories/  services/  utils/
+│   │   ├── ledger/          # backend-agnostic Ledger port (modern/legacy adapters)
+│   │   ├── middleware/      # auth extractors (customer + service plane)
+│   │   ├── errors/  repositories/  services/  utils/  # utils: jwt, password
 │   │   └── ...
 │   └── config/default.toml  # default config (DB, server, JWT, security, logging)
 ├── src/core/tables/         # PostgreSQL DDL (the real substance of the schema)
@@ -167,16 +171,16 @@ under `/api/v1`:
 
 | Area | Endpoints |
 |------|-----------|
-| **Auth** | `POST /auth/login`, `/auth/refresh`, `/auth/logout` |
+| **Auth** | `POST /auth/login`, `/auth/refresh`, `/auth/logout`, `/auth/service-token` |
 | **Customers** | `POST /customers`, `GET`/`PUT /customers/profile`, `POST /customers/kyc/documents` |
 | **Accounts** | `GET`/`POST /accounts`, `GET /accounts/{id}`, `GET /accounts/{id}/balance` |
-| **Transactions** | `POST /transactions/transfer`, `/deposit`, `/withdrawal`, `GET /transactions` |
+| **Transactions** | `POST /transactions/transfer`, `/deposit`, `/withdrawal`, `GET /transactions`, `GET /transactions/{id}`, `POST /transactions/{id}/reverse` |
 | **Security** | `GET /security/sessions`, `GET /security/devices`, `POST /security/devices/trust` |
 | **System** | `GET /health`, `GET /docs` |
 
-> Most handlers are placeholders today — the routing, middleware, config, and
-> database layers are wired up, but business logic for transactions, accounts,
-> etc. still needs implementing. See [Implementation status](#implementation-status).
+> Auth, customers, accounts, cards, and money movement are implemented; profile
+> update, KYC upload, and `/security/*` are still placeholders. See
+> [Implementation status](#implementation-status).
 
 ## Implementation status
 
@@ -205,23 +209,34 @@ under `/api/v1`:
 
 **Working endpoints**
 
-- `GET /health` — real database-backed health check
-- `GET /docs` — HTML API documentation
+- **Auth** — `POST /auth/login|refresh|logout` (argon2 verification, JWT with a
+  `sid` claim, revocable `user_sessions`, login lockout) and
+  `POST /auth/service-token` (network-plane client-credentials). Two trust
+  planes: **customer JWT** for `/customers`/`/accounts`/`/transactions`,
+  **service JWT** for `/cards/*` (`middleware/auth.rs`, `utils/{jwt,password}.rs`)
+- **Customers** — `POST /customers` (register + argon2 hash into
+  `customer_credentials`), `GET /customers/profile`
+- **Accounts** — `GET`/`POST /accounts`, `GET /accounts/{id}`,
+  `GET /accounts/{id}/balance`
+- **Cards** — `POST /cards/authorize|capture|settle`, dual-posted via the Ledger port
+- **Transactions** — `POST /transactions/deposit|withdrawal|transfer`,
+  `GET /transactions`, `GET /transactions/{id}`,
+  `POST /transactions/{id}/reverse`; dual-posted (local subledger + core GL) with
+  idempotency, account limits, and fees
+- `GET /health` (database-backed) and `GET /docs`
 
 ### 🚧 Not yet implemented
 
 **Handler business logic** — routes exist but return `"... endpoint - TODO:
 implement"`:
 
-- **Auth** — `login`, `refresh`, `logout` (JWT issuance/validation, argon2
-  password verification, session handling)
-- **Customers** — create, get/update profile, KYC document upload
-- **Accounts** — list, create, get details, get balance
-- **Transactions** — transfer, deposit, withdrawal, history (wired to the
-  double-entry ledger)
+- **Customers** — update profile (`PUT /customers/profile`), KYC document upload
 - **Security** — sessions, devices, device trust
-- The `repositories/`, `services/`, `middleware/`, and `utils/` modules are
-  empty placeholders awaiting these implementations
+- The `repositories/` and `services/` modules are still thin placeholders
+
+**Bigger pieces not started** — external payment rails (ACH/Interac/wire), a
+fraud engine (the `/security/*` surface + a `risk_assess` seam in card
+authorize), and MFA.
 
 **Planned subsystems** (not yet started):
 

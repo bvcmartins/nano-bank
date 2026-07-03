@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project is
 
-An experimental Canadian challenger-bank core API — Rust (`axum 0.7`) over a PostgreSQL 16 double-entry ledger running in a local Kind (Kubernetes-in-Docker) cluster. The schema and infrastructure are fully built; most handler business logic is still TODO stubs. The card payment rails (`/api/v1/cards/*`) are the most complete part.
+An experimental Canadian challenger-bank core API — Rust (`axum 0.7`) over a PostgreSQL 16 double-entry ledger running in a local Kind (Kubernetes-in-Docker) cluster. The schema and infrastructure are fully built. Auth, customer/account management, the card payment rails, and money movement (`/api/v1/transactions/*`) are implemented; a few handlers (profile update, KYC upload, `/security/*`) are still TODO stubs.
 
 ## Commands
 
@@ -83,12 +83,14 @@ Both carry a $1 trillion overdraft limit so their balances can go negative. They
 ### What is and isn't implemented
 
 Implemented handlers (real SQL + logic):
-- `POST /api/v1/customers` — `handlers/customers.rs`
-- `POST /api/v1/accounts` — `handlers/accounts.rs`
-- `POST /api/v1/cards/authorize|capture|settle` — `handlers/cards.rs`
+- **Auth** — `POST /api/v1/auth/login|refresh|logout` (customer plane: argon2, JWT with a `sid` claim, revocable `user_sessions`, login lockout) and `POST /api/v1/auth/service-token` (network plane, client-credentials) — `handlers/auth.rs`, `middleware/auth.rs`, `utils/{jwt,password}.rs`
+- **Customers** — `POST /api/v1/customers` (register + argon2 hash into `customer_credentials`), `GET /api/v1/customers/profile` — `handlers/customers.rs`
+- **Accounts** — `GET`/`POST /api/v1/accounts`, `GET /api/v1/accounts/{id}`, `GET /api/v1/accounts/{id}/balance` — `handlers/accounts.rs`
+- **Cards** — `POST /api/v1/cards/authorize|capture|settle` (dual-posted via the Ledger port) — `handlers/cards.rs`
+- **Transactions** — `POST /api/v1/transactions/deposit|withdrawal|transfer`, `GET /api/v1/transactions`, `GET /api/v1/transactions/{id}`, `POST /api/v1/transactions/{id}/reverse` — dual-posted (local subledger + core GL), with idempotency, account limits, and fees — `handlers/transactions.rs`
 - `GET /health`, `GET /docs`
 
-Everything else (`auth`, `transactions`, `security`, GET endpoints for customers/accounts) returns a static `"... endpoint - TODO: implement"` string.
+Still TODO stubs (return `"... endpoint - TODO: implement"`): `PUT /customers/profile`, `POST /customers/kyc/documents`, and the whole `/api/v1/security/*` surface (`sessions`, `devices`, `devices/trust`). Two trust planes gate the above: **customer JWT** (`role: customer`) for `/customers` + `/accounts` + `/transactions`, **service JWT** (`role: service`) for `/cards/*` — see `middleware/auth.rs`.
 
 ### Bruno collection
 
@@ -188,8 +190,10 @@ DB transaction, before commit — so if the core can't record it, the operation
 fails rather than letting the local subledger and the GL drift. `authorize` is
 local-only (a hold; no money moves).
 
-`transactions.rs` (deposit/transfer/withdrawal) is still stubbed and not yet
-routed through the port.
+`transactions.rs` (deposit/withdrawal/transfer, plus reversals) is implemented
+and also dual-posts through the Ledger port, mirroring the card rails: the local
+subledger (`transaction_entries`) plus the aggregate GL to the core, with a
+503 + rollback if the core is down.
 
 ## Gotchas
 
@@ -200,4 +204,6 @@ routed through the port.
 - Config is layered: `api/config/default.toml` plus env vars with prefix
   `NANO_BANK` and `__` as the separator (e.g. `NANO_BANK__SERVER__PORT=8082` to
   run a second instance alongside one already holding `:8081`).
-- Most non-card handlers (`auth`, `security`, `transactions`) are still stubs.
+- `auth`, `customers`, `accounts`, `cards`, and `transactions` handlers are
+  implemented; only `PUT /customers/profile`, `POST /customers/kyc/documents`,
+  and `/security/*` remain stubs.
