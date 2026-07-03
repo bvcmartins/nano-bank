@@ -223,6 +223,7 @@ Authorization: Bearer {{accessToken}}
 ###
 
 # 11d. Withdraw $30 from chequing.
+# @name withdrawal
 POST {{baseUrl}}/api/v1/transactions/withdrawal
 Content-Type: application/json
 Authorization: Bearer {{accessToken}}
@@ -278,8 +279,10 @@ Authorization: Bearer {{accessToken}}
 
 ###
 
-# 11i. Reverse the deposit from 11c (claws the $100 back). Original -> reversed.
-POST {{baseUrl}}/api/v1/transactions/{{deposit.response.body.transaction_id}}/reverse
+# 11i. Reverse the withdrawal from 11d (a refund → always succeeds). Original -> reversed.
+#      NOTE: reversing the DEPOSIT (11c) instead can fail with INSUFFICIENT_FUNDS
+#      if the money was already spent — v1 reversals don't allow a negative clawback.
+POST {{baseUrl}}/api/v1/transactions/{{withdrawal.response.body.transaction_id}}/reverse
 Content-Type: application/json
 Authorization: Bearer {{accessToken}}
 
