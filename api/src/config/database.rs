@@ -79,11 +79,18 @@ pub async fn run_migrations(pool: &DatabasePool) -> Result<(), sqlx::Error> {
         CREATE TABLE IF NOT EXISTS idempotency_keys (
             customer_id UUID NOT NULL REFERENCES customers(customer_id) ON DELETE CASCADE,
             idempotency_key VARCHAR(255) NOT NULL,
+            request_fingerprint VARCHAR(255),
             transaction_id UUID NOT NULL REFERENCES transactions(transaction_id) ON DELETE CASCADE,
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
             PRIMARY KEY (customer_id, idempotency_key)
         )
         "#,
+    )
+    .execute(pool)
+    .await?;
+    // For a DB that created idempotency_keys before the fingerprint column existed.
+    sqlx::query(
+        "ALTER TABLE idempotency_keys ADD COLUMN IF NOT EXISTS request_fingerprint VARCHAR(255)",
     )
     .execute(pool)
     .await?;

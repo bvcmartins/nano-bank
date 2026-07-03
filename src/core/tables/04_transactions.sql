@@ -36,6 +36,7 @@ CREATE TABLE transactions (
 CREATE TABLE idempotency_keys (
     customer_id UUID NOT NULL REFERENCES customers(customer_id) ON DELETE CASCADE,
     idempotency_key VARCHAR(255) NOT NULL,
+    request_fingerprint VARCHAR(255), -- pins the op + amount + accounts a key was used for
     transaction_id UUID NOT NULL REFERENCES transactions(transaction_id) ON DELETE CASCADE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
     PRIMARY KEY (customer_id, idempotency_key)

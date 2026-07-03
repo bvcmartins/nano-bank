@@ -268,37 +268,57 @@ async fn build_response(
 // idempotency
 // ---------------------------------------------------------------------------
 
-/// The transaction a prior request with this key produced, if any.
-async fn find_idempotent(
+/// If a prior request under this `(customer, key)` exists, return its transaction
+/// as a replay — or a 409 if the key was reused with different parameters. The
+/// `fingerprint` pins the operation + amount + accounts, so a client can't cross a
+/// key between (say) a $10 deposit and a $500 withdrawal and silently drop one.
+async fn idempotent_replay(
     state: &AppState,
     customer_id: Uuid,
-    key: &str,
-) -> Result<Option<Uuid>, AppError> {
-    sqlx::query_scalar(
-        "SELECT transaction_id FROM idempotency_keys WHERE customer_id = $1 AND idempotency_key = $2",
+    key: Option<&str>,
+    fingerprint: &str,
+) -> Result<Option<TransactionResponse>, AppError> {
+    let Some(key) = key else {
+        return Ok(None);
+    };
+    let row: Option<(Uuid, Option<String>)> = sqlx::query_as(
+        "SELECT transaction_id, request_fingerprint FROM idempotency_keys \
+         WHERE customer_id = $1 AND idempotency_key = $2",
     )
     .bind(customer_id)
     .bind(key)
     .fetch_optional(&state.pool)
     .await
-    .map_err(AppError::Database)
+    .map_err(AppError::Database)?;
+
+    match row {
+        None => Ok(None),
+        Some((txn_id, stored)) if stored.as_deref() == Some(fingerprint) => {
+            Ok(Some(build_response(state, txn_id, customer_id).await?))
+        }
+        Some(_) => Err(AppError::Conflict(
+            "idempotency key already used with different request parameters".to_string(),
+        )),
+    }
 }
 
-/// Record the key against the new transaction, in the same tx. `Ok(false)` means
-/// a concurrent request already claimed it (unique violation) — the caller should
-/// roll back and return the original.
+/// Record the key + fingerprint against the new transaction, in the same tx.
+/// `Ok(false)` means a concurrent request already claimed it (unique violation) —
+/// the caller should roll back and replay.
 async fn record_key_in_tx(
     tx: &mut Tx<'_>,
     customer_id: Uuid,
     key: &str,
+    fingerprint: &str,
     transaction_id: Uuid,
 ) -> Result<bool, AppError> {
     match sqlx::query(
-        "INSERT INTO idempotency_keys (customer_id, idempotency_key, transaction_id) \
-         VALUES ($1, $2, $3)",
+        "INSERT INTO idempotency_keys (customer_id, idempotency_key, request_fingerprint, transaction_id) \
+         VALUES ($1, $2, $3, $4)",
     )
     .bind(customer_id)
     .bind(key)
+    .bind(fingerprint)
     .bind(transaction_id)
     .execute(&mut **tx)
     .await
@@ -307,6 +327,25 @@ async fn record_key_in_tx(
         Err(sqlx::Error::Database(db)) if db.code().as_deref() == Some("23505") => Ok(false),
         Err(e) => Err(AppError::Database(e)),
     }
+}
+
+/// Lock a set of accounts `FOR UPDATE` in a canonical (ascending id) order, so
+/// every handler acquires shared accounts in the same order — no ABBA deadlocks.
+async fn lock_all(
+    tx: &mut Tx<'_>,
+    ids: &[Uuid],
+) -> Result<std::collections::HashMap<Uuid, Account>, AppError> {
+    let mut ordered: Vec<Uuid> = ids.to_vec();
+    ordered.sort();
+    ordered.dedup();
+    let mut locked = std::collections::HashMap::with_capacity(ordered.len());
+    for id in ordered {
+        let acct = lock_account(tx, id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("Account not found".to_string()))?;
+        locked.insert(id, acct);
+    }
+    Ok(locked)
 }
 
 // ---------------------------------------------------------------------------
@@ -397,13 +436,16 @@ async fn deposit_money(
     req.validate()?;
     let amount = normalize_amount(req.amount)?;
 
-    if let Some(key) = req.idempotency_key.as_deref() {
-        if let Some(orig) = find_idempotent(&state, auth.customer_id, key).await? {
-            return Ok((
-                StatusCode::OK,
-                Json(build_response(&state, orig, auth.customer_id).await?),
-            ));
-        }
+    let fingerprint = format!("deposit:{}:{}", req.account_id, amount);
+    if let Some(resp) = idempotent_replay(
+        &state,
+        auth.customer_id,
+        req.idempotency_key.as_deref(),
+        &fingerprint,
+    )
+    .await?
+    {
+        return Ok((StatusCode::OK, Json(resp)));
     }
 
     let system = ensure_system_accounts(&state.pool)
@@ -411,11 +453,8 @@ async fn deposit_money(
         .map_err(AppError::Database)?;
 
     let mut tx = state.pool.begin().await?;
-    let acct = lock_account(&mut tx, req.account_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Account not found".to_string()))?;
-    ensure_owned_movable(&acct, auth.customer_id)?;
-    let _cash = lock_account(&mut tx, system.bank_settlement_id).await?;
+    let locked = lock_all(&mut tx, &[req.account_id, system.bank_settlement_id]).await?;
+    ensure_owned_movable(&locked[&req.account_id], auth.customer_id)?;
 
     let (txn_id, reference) = insert_transaction(
         &mut tx,
@@ -439,7 +478,8 @@ async fn deposit_money(
     if let Some(resp) = commit_or_replay(
         &state,
         &mut tx,
-        &req.idempotency_key,
+        req.idempotency_key.as_deref(),
+        &fingerprint,
         txn_id,
         auth.customer_id,
     )
@@ -466,27 +506,29 @@ async fn deposit_money(
 }
 
 /// Record the idempotency key (if any) inside the tx. Returns `Some(response)` if
-/// a concurrent request already claimed the key — the caller returns it as a 200
-/// replay after this tx is rolled back.
+/// a concurrent request already claimed the key (or a 409 if it claimed it with
+/// different parameters) — the caller returns it after this tx is rolled back.
 async fn commit_or_replay(
     state: &AppState,
     tx: &mut Tx<'_>,
-    key: &Option<String>,
+    key: Option<&str>,
+    fingerprint: &str,
     txn_id: Uuid,
     customer_id: Uuid,
 ) -> Result<Option<TransactionResponse>, AppError> {
-    let Some(key) = key.as_deref() else {
+    let Some(key) = key else {
         return Ok(None);
     };
-    if record_key_in_tx(tx, customer_id, key, txn_id).await? {
+    if record_key_in_tx(tx, customer_id, key, fingerprint, txn_id).await? {
         return Ok(None);
     }
-    // Lost the race: the key exists on another transaction. Roll back ours and
-    // return the original.
-    let orig = find_idempotent(state, customer_id, key)
-        .await?
-        .ok_or_else(|| AppError::Internal("idempotency race with no record".to_string()))?;
-    Ok(Some(build_response(state, orig, customer_id).await?))
+    // Lost the race: return the winner's result (or 409 on a parameter mismatch).
+    match idempotent_replay(state, customer_id, Some(key), fingerprint).await? {
+        Some(resp) => Ok(Some(resp)),
+        None => Err(AppError::Internal(
+            "idempotency race with no record".to_string(),
+        )),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -501,13 +543,16 @@ async fn withdraw_money(
     req.validate()?;
     let amount = normalize_amount(req.amount)?;
 
-    if let Some(key) = req.idempotency_key.as_deref() {
-        if let Some(orig) = find_idempotent(&state, auth.customer_id, key).await? {
-            return Ok((
-                StatusCode::OK,
-                Json(build_response(&state, orig, auth.customer_id).await?),
-            ));
-        }
+    let fingerprint = format!("withdrawal:{}:{}", req.account_id, amount);
+    if let Some(resp) = idempotent_replay(
+        &state,
+        auth.customer_id,
+        req.idempotency_key.as_deref(),
+        &fingerprint,
+    )
+    .await?
+    {
+        return Ok((StatusCode::OK, Json(resp)));
     }
 
     let system = ensure_system_accounts(&state.pool)
@@ -515,13 +560,11 @@ async fn withdraw_money(
         .map_err(AppError::Database)?;
 
     let mut tx = state.pool.begin().await?;
-    let acct = lock_account(&mut tx, req.account_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Account not found".to_string()))?;
-    ensure_owned_movable(&acct, auth.customer_id)?;
-    ensure_funds(&acct, amount)?;
+    let locked = lock_all(&mut tx, &[req.account_id, system.bank_settlement_id]).await?;
+    let acct = &locked[&req.account_id];
+    ensure_owned_movable(acct, auth.customer_id)?;
+    ensure_funds(acct, amount)?;
     enforce_limit(&mut tx, req.account_id, amount, LimitKind::Withdrawal).await?;
-    let _cash = lock_account(&mut tx, system.bank_settlement_id).await?;
 
     let (txn_id, reference) = insert_transaction(
         &mut tx,
@@ -546,7 +589,8 @@ async fn withdraw_money(
     if let Some(resp) = commit_or_replay(
         &state,
         &mut tx,
-        &req.idempotency_key,
+        req.idempotency_key.as_deref(),
+        &fingerprint,
         txn_id,
         auth.customer_id,
     )
@@ -589,13 +633,19 @@ async fn transfer_money(
         ));
     }
 
-    if let Some(key) = req.idempotency_key.as_deref() {
-        if let Some(orig) = find_idempotent(&state, auth.customer_id, key).await? {
-            return Ok((
-                StatusCode::OK,
-                Json(build_response(&state, orig, auth.customer_id).await?),
-            ));
-        }
+    let fingerprint = format!(
+        "transfer:{}:{}:{}",
+        req.from_account_id, req.to_account_id, amount
+    );
+    if let Some(resp) = idempotent_replay(
+        &state,
+        auth.customer_id,
+        req.idempotency_key.as_deref(),
+        &fingerprint,
+    )
+    .await?
+    {
+        return Ok((StatusCode::OK, Json(resp)));
     }
 
     let fee = transfer_fee();
@@ -604,29 +654,22 @@ async fn transfer_money(
         .map_err(AppError::Database)?;
 
     let mut tx = state.pool.begin().await?;
-    // Lock accounts in a stable order (by id) to avoid deadlocks.
-    let (lock1, lock2) = if req.from_account_id <= req.to_account_id {
-        (req.from_account_id, req.to_account_id)
-    } else {
-        (req.to_account_id, req.from_account_id)
-    };
-    let a1 = lock_account(&mut tx, lock1)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Account not found".to_string()))?;
-    let a2 = lock_account(&mut tx, lock2)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Account not found".to_string()))?;
-    let (from_acct, to_acct) = if lock1 == req.from_account_id {
-        (&a1, &a2)
-    } else {
-        (&a2, &a1)
-    };
+    let locked = lock_all(
+        &mut tx,
+        &[
+            req.from_account_id,
+            req.to_account_id,
+            system.bank_settlement_id,
+        ],
+    )
+    .await?;
+    let from_acct = &locked[&req.from_account_id];
+    let to_acct = &locked[&req.to_account_id];
 
     ensure_owned_movable(from_acct, auth.customer_id)?;
     ensure_movable(to_acct)?;
     ensure_funds(from_acct, amount + fee)?; // must cover the fee too
     enforce_limit(&mut tx, req.from_account_id, amount, LimitKind::Transfer).await?;
-    let _cash = lock_account(&mut tx, system.bank_settlement_id).await?;
 
     let (txn_id, reference) = insert_transaction(
         &mut tx,
@@ -678,7 +721,8 @@ async fn transfer_money(
     if let Some(resp) = commit_or_replay(
         &state,
         &mut tx,
-        &req.idempotency_key,
+        req.idempotency_key.as_deref(),
+        &fingerprint,
         txn_id,
         auth.customer_id,
     )
@@ -804,20 +848,13 @@ async fn reverse_transaction(
     // Reversal debits the account originally credited, credits the one debited.
     let (rev_debit, rev_credit) = (orig_credit, orig_debit);
 
+    let system = ensure_system_accounts(&state.pool)
+        .await
+        .map_err(AppError::Database)?;
+
     let mut tx = state.pool.begin().await?;
-    // Lock both involved accounts in a stable order.
-    let (lock1, lock2) = if rev_debit <= rev_credit {
-        (rev_debit, rev_credit)
-    } else {
-        (rev_credit, rev_debit)
-    };
-    let l1 = lock_account(&mut tx, lock1)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Account not found".to_string()))?;
-    let l2 = lock_account(&mut tx, lock2)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Account not found".to_string()))?;
-    let debit_acct = if lock1 == rev_debit { &l1 } else { &l2 };
+    let locked = lock_all(&mut tx, &[rev_debit, rev_credit]).await?;
+    let debit_acct = &locked[&rev_debit];
 
     // v1: reject if the reversal would overdraw the debited account (no negative
     // clawback yet).
@@ -833,15 +870,33 @@ async fn reverse_transaction(
     .await?;
     floor_available(&mut tx, rev_debit).await?;
     post_two_legged(&mut tx, rev_txn, rev_debit, rev_credit, amount).await?;
-    sync_available(&mut tx, rev_debit).await?;
-    sync_available(&mut tx, rev_credit).await?;
+    // Restore available_balance: a customer account tracks balance + overdraft, but
+    // the internal cash/settlement account (huge overdraft) must stay at 0 — syncing
+    // it to balance + overdraft would trip chk_available_balance_logical on a later
+    // debit (e.g. the next deposit).
+    for acct in [rev_debit, rev_credit] {
+        if acct == system.bank_settlement_id {
+            floor_available(&mut tx, acct).await?;
+        } else {
+            sync_available(&mut tx, acct).await?;
+        }
+    }
 
-    // Mark the original reversed and cross-link it.
-    sqlx::query("UPDATE transactions SET status = 'reversed' WHERE transaction_id = $1")
-        .bind(id)
-        .execute(&mut *tx)
-        .await
-        .map_err(AppError::Database)?;
+    // Mark the original reversed — guarded on its current status so two concurrent
+    // reversals can't both succeed. The row lock + this WHERE serialise them; the
+    // loser sees 0 rows affected and rolls back (undoing its reversal legs).
+    let marked = sqlx::query(
+        "UPDATE transactions SET status = 'reversed' WHERE transaction_id = $1 AND status = 'completed'",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await
+    .map_err(AppError::Database)?;
+    if marked.rows_affected() != 1 {
+        return Err(AppError::Conflict(
+            "transaction is no longer reversible (already reversed)".to_string(),
+        ));
+    }
     sqlx::query(
         "INSERT INTO transaction_reversals (original_transaction_id, reversal_transaction_id, reason, authorized_by) \
          VALUES ($1, $2, $3, $4)",
