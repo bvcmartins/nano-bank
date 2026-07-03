@@ -179,6 +179,82 @@ Authorization: Bearer {{accessToken}}
 
 ###
 
+# ═════════════════════════════════════════════════════════════
+# Money movement (customer plane). Needs a core up (CORE_BACKEND);
+# each op dual-posts the local subledger + the core GL.
+# ═════════════════════════════════════════════════════════════
+
+# 11a. Open a chequing account (money movement is for deposit accounts).
+# @name openChequing
+POST {{baseUrl}}/api/v1/accounts
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+    "account_type": "chequing"
+}
+
+###
+
+# 11b. Open a savings account (transfer destination).
+# @name openSavings
+POST {{baseUrl}}/api/v1/accounts
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+    "account_type": "savings"
+}
+
+###
+
+# 11c. Deposit $100 into chequing.
+POST {{baseUrl}}/api/v1/transactions/deposit
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+    "account_id": "{{openChequing.response.body.account_id}}",
+    "amount": 100.00,
+    "description": "Initial deposit"
+}
+
+###
+
+# 11d. Withdraw $30 from chequing.
+POST {{baseUrl}}/api/v1/transactions/withdrawal
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+    "account_id": "{{openChequing.response.body.account_id}}",
+    "amount": 30.00,
+    "description": "ATM withdrawal"
+}
+
+###
+
+# 11e. Transfer $25 chequing → savings.
+POST {{baseUrl}}/api/v1/transactions/transfer
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+    "from_account_id": "{{openChequing.response.body.account_id}}",
+    "to_account_id": "{{openSavings.response.body.account_id}}",
+    "amount": 25.00,
+    "description": "Move to savings"
+}
+
+###
+
+# 11f. Transaction history for the authenticated customer.
+GET {{baseUrl}}/api/v1/transactions?limit=20
+Accept: application/json
+Authorization: Bearer {{accessToken}}
+
+###
+
 # ─────────────────────────────────────────────────────────────
 # 12. Refresh — exchange the refresh token for a new access token
 #     The refresh token is single-use: this rotates it, so re-running
