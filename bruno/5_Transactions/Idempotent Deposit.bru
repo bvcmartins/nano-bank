@@ -1,0 +1,32 @@
+meta {
+  name: Idempotent Deposit
+  type: http
+  seq: 9
+}
+
+post {
+  url: {{baseUrl}}/api/v1/transactions/deposit
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "account_id": "{{chequingId}}",
+    "amount": 10.00,
+    "description": "Idempotent deposit demo",
+    "idempotency_key": "bruno-demo-key"
+  }
+}
+
+docs {
+  Run this request TWICE with the same idempotency_key.
+  - 1st call: creates the deposit (HTTP 201), balance +10.
+  - 2nd call: returns the SAME transaction (HTTP 200), balance unchanged (no double-post).
+  Reusing the same key with different parameters (e.g. change the amount) returns HTTP 409.
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}
