@@ -1,20 +1,24 @@
-# Nano-Bank Personal Manager — Design (Phase 1: read/advise foundation)
+# Nano-Bank Personal Manager — Design (Phase 1: read/advise + instructed act)
 
 **Date:** 2026-07-07
 **Status:** approved for spec review
-**Scope:** Phase 1 only. Act (Phase 2) and Proactive (Phase 3) are follow-on specs.
+**Scope:** Phase 1. Includes read/advise **and a minimal instructed-act path** (money
+movement under simple guardrails). Full mandate-based governance (PR #19) and Proactive
+monitoring are follow-on phases.
 
 ## 1. Purpose
 
 An agentic **personal manager** for a nano-bank client. It knows everything about
-one client and answers/advises about their banking. It is consumed as a **service
-endpoint** (the primary deliverable) and, in this phase, is limited to **reading and
-advising** — no money moves.
+one client, answers/advises about their banking, **and performs transactions on the
+client's instruction** (transfer / deposit / withdrawal) under simple guardrails. It is
+consumed as a **service endpoint** (the primary deliverable).
 
 Two consumers, one core:
 - **The Agentic Branch** — an agent-to-agent HTTP API that other autonomous agents call.
-- **A test/dev Streamlit client** — a throwaway harness to exercise the endpoint by hand.
-  (The real human UI is a later, separate effort and is out of scope here.)
+- **A test interface** — a first-class dev harness (§7.2) that (a) **seeds** customers,
+  accounts and transactions directly against nano-bank, and (b) **chats** with the
+  manager to ask information and instruct transactions. (The real human UI is a later,
+  separate effort and is out of scope here.)
 
 ## 2. Requirements traceability
 
@@ -22,10 +26,12 @@ Two consumers, one core:
 |---|---|
 | 1. Agentic personal manager | §5 agent core (ported `desktop_agent` harness) |
 | 2. Knows everything about a client | §6 MCP server DB-read tools + server-side snapshot |
-| 3. Accessed from UI and Agentic Branch | §7 FastAPI endpoint (primary) + Streamlit test client |
+| 3. Accessed from UI and Agentic Branch | §7 FastAPI endpoint (primary) + test interface |
 | 4. Harness similar to `desktop_agent.py` | §5 (managed ReAct agent, context hook, model factory) |
 | 5. Local Qdrant RAG for interaction memories (not ragu) | §6 MCP RAG tools over a dedicated local Qdrant |
 | 6. Ollama cloud backend, GLM5.2 → GLM4.7 fallback | §4 model factory + startup resolver |
+| 7. Manager performs transactions on instruction | §6.5 act tools (nano-bank API) + §6.6 guardrails |
+| 8. Test interface: seed customer/account/transactions + ask + instruct | §7.2 |
 
 ## 3. Layout
 
@@ -39,18 +45,19 @@ agent/
   mcp_server.py         # MCP server: the ONLY gateway to DB + RAG, customer-scoped IN CODE
   nano_manager.py       # agent core: model factory, LangGraph agent, MCP-client wiring, assist()
   api.py                # FastAPI — the PRIMARY deliverable (the manager endpoint)
-  ui.py                 # Streamlit — TEST/dev harness only; talks to api.py like any other client
+  test_console.py       # Streamlit TEST interface: seed (customer/account/txns) + chat + instruct
+  seed.py               # seeding helpers (create customer/account, fund, transfer) via nano-bank API
   Containerfile.api     # api.py (+ nano_manager) image
   Containerfile.mcp     # mcp_server.py image
-  Containerfile.ui      # ui.py image (test client)
-  compose.yaml          # api + mcp + qdrant (+ optional ui); a project-local network
+  Containerfile.console # test_console.py image (test interface)
+  compose.yaml          # api + mcp + qdrant (+ console); a project-local network
   requirements.txt
   .env.example
   README.md
   tests/                # unit + integration tests
 ```
 
-Containers share a **private network**. Only `api` (and, in dev, `ui`) publish ports
+Containers share a **private network**. Only `api` (and, in dev, `console`) publish ports
 to the host; `mcp` and `qdrant` are reachable **only inside the network** (see §6.2).
 
 ## 4. Model factory (the one backend seam)
@@ -79,11 +86,14 @@ checkpointer)`, following `desktop_agent.build_managed_agent`.
 
 Deliberate divergences from `desktop_agent`:
 - **No filesystem / bash / code tools.** They are unsafe and irrelevant for a banking
-  agent. Phase-1 tools are exactly the customer-bound MCP tools from §6.
+  agent. Phase-1 tools are exactly the customer-bound MCP tools from §6 (reads, RAG,
+  and the act tools of §6.5).
 - **Persona (`MANAGER_PROMPT`):** a careful personal banking manager that answers
-  *only* from the client's real data, never fabricates balances or transactions, says
-  so plainly when it does not know, and — in this phase — advises only (it cannot and
-  must not move money).
+  *only* from the client's real data, never fabricates balances or transactions, and
+  says so plainly when it does not know. It **may move money only on an explicit client
+  instruction**, only from the bound customer's own accounts, and only within the
+  guardrails of §6.6 — it never initiates transfers on its own (proactive action is a
+  later phase).
 
 **Context hook** (ported `make_context_hook`): before the model call, it injects
 (a) the client **snapshot** and (b) **recalled memories**, both obtained server-side
@@ -98,28 +108,35 @@ It opens a customer-bound MCP session (§6), loads snapshot + recall, runs the R
 loop, then stores the turn's memories through the same session. `customer_id` is a
 parameter of this server-side function — it is **not** reachable by the LLM.
 
-## 6. MCP server (`mcp_server.py`) — single customer-scoped gateway to DB + RAG
+## 6. MCP server (`mcp_server.py`) — single customer-scoped gateway to DB + RAG + writes
 
-Both Postgres reads and Qdrant memory live behind **one MCP server**. This is the
-security spine of the design.
+Postgres reads, Qdrant memory, **and the nano-bank write API** all live behind **one MCP
+server**. This is the security spine of the design.
 
 ### 6.1 Tools exposed to the LLM (no customer parameter)
 - **DB-read (Postgres, read-only connection):**
   `get_profile()`, `get_accounts()`, `get_transactions(limit)`, `get_cards()`.
 - **RAG (Qdrant):** `recall(query, k)`, `remember(fact, kind)`.
+- **Act (nano-bank API, §6.5):** `transfer(to_account, amount, memo?)`,
+  `deposit(to_account, amount)`, `withdraw(from_account, amount)`.
 
-None of these take a `customer_id`. The agent therefore cannot *express* access to
-another customer — the scoping is absent from the tool schema, not a prompt rule.
+None of these take a `customer_id` **or an auth token**. The agent therefore cannot
+*express* access to — or action on — another customer. The scoping is absent from the
+tool schema, not a prompt rule. For act tools the LLM supplies only the amount, the
+destination, and *which of the bound customer's own accounts* to use; the owning
+customer and the credential are bound server-side (§6.2, §6.5).
 
 ### 6.2 Customer binding — HTTP + trusted header (enforced in code)
 - One long-running **streamable-HTTP** MCP server, **not published to the host** —
   reachable only by the `api` service over the private container network (§3).
 - `api.py`, after authenticating the request (§7), opens a **per-request** MCP client
-  session passing `customer_id` in a **trusted header** (e.g. `X-Nano-Customer`) that
-  the LLM never sees or sets.
-- The MCP server reads that header and stamps the bound `customer_id` into **every**
-  SQL `WHERE customer_id = …` and **every** Qdrant payload filter. Any `customer_id`
-  arriving in tool arguments is ignored — the header is the sole source of truth.
+  session passing two **trusted headers** the LLM never sees or sets: `X-Nano-Customer`
+  (the bound `customer_id`) and `X-Nano-Token` (that customer's nano-bank JWT, used only
+  for act calls — §6.5).
+- The MCP server reads those headers and stamps the bound `customer_id` into **every**
+  SQL `WHERE customer_id = …` and **every** Qdrant payload filter, and uses the bound
+  token for every act call. Any `customer_id`/token arriving in tool arguments is
+  ignored — the headers are the sole source of truth.
 - Trust boundary: **network isolation** — only the `api` container can reach the MCP
   container (the MCP port is unpublished). The LLM influences the server only through
   tool *arguments*, which carry no customer.
@@ -150,6 +167,40 @@ Same interface as the harness's `BiTemporalMemory` (`store` / `invalidate` /
 - **What gets written each turn:** the user request, the assistant answer, and any
   salient facts — all through the customer-bound session.
 
+### 6.5 Acting (writes) — nano-bank API, customer-token-bound
+The act tools (`transfer` / `deposit` / `withdraw`) are the only path that mutates
+money, and they go through the **existing authenticated nano-bank API** on `:8081`
+(`POST /api/v1/transactions/{deposit,withdrawal,transfer}`), so all ledger triggers,
+balance/limit checks and double-entry invariants hold — the manager never writes to
+Postgres directly.
+
+- **Auth is bound, not passed by the LLM.** Each act call uses the `X-Nano-Token` bound
+  to the session (§6.2) — the seeded customer's nano-bank JWT, which nano-bank already
+  requires for money movement (PR #16 gated transfers behind customer auth). Because the
+  token *is* the customer, the bank itself guarantees writes only touch that customer's
+  accounts. The LLM cannot supply or swap the token.
+- **Source-account guard.** Before calling nano-bank, the MCP server verifies the
+  `from`/`to` account the LLM named actually belongs to the bound customer (via the §6.3
+  read path); a mismatch is refused and audited (§6.6) — defense-in-depth on top of the
+  bank's own auth.
+- **Idempotency.** Transfers pass an `idempotency_key` (the bank honors it) so a retried
+  tool call cannot double-spend.
+
+### 6.6 Guardrails (simple, Phase 1)
+Money movement by an AI needs a floor of governance even before the full mandate system
+(§12). Phase 1 keeps it deliberately small:
+- **Amount cap.** `ACT_MAX_PER_TX` (env) refuses any single transaction above the cap
+  *before* it reaches the bank.
+- **Append-only audit.** Every act decision — **allow and deny** — is recorded
+  (customer, tool, amount, destination, outcome, reason, timestamp) to an append-only
+  store (a dedicated Qdrant collection / table). This is the vocabulary Phase 2's
+  mandate `agent_actions` audit will subsume.
+- **Optional confirmation.** `ACT_CONFIRM` (env, default **off** in the dev harness so
+  the test interface can drive fluidly) gates each act behind an explicit
+  confirm step when enabled.
+- **Explicit-instruction only.** Act tools are invoked only in response to a client
+  instruction in the conversation; the manager does not act proactively (Phase 3).
+
 ## 7. Surfaces
 
 ### 7.1 Agentic Branch API (`api.py`, FastAPI) — primary
@@ -160,6 +211,12 @@ Same interface as the harness's `BiTemporalMemory` (`store` / `invalidate` /
 - **Auth (Phase 1):** deliberately simple — a shared `BRANCH_SERVICE_TOKEN` bearer for
   calling agents. The `customer_id` from the (authenticated) request binds the MCP
   session (§6.2).
+- **Binding the customer's nano-bank token.** To let the manager *act*, `api.py` needs
+  that customer's nano-bank JWT for `X-Nano-Token`. In Phase 1 (dev/test) it obtains one
+  by logging into nano-bank with the **seeded credentials** (kept server-side, keyed by
+  `customer_id`); it is never taken from the LLM or the request body. Callers that only
+  need read/advise can omit it (act tools then refuse). This whole mechanism is what
+  Phase 2 replaces with the agent-token→mandate flow.
 - Default port `:8086`.
 
 **Caller vs agent scoping.** The external caller still names `customer_id` in the URL;
@@ -178,21 +235,40 @@ agent" invariant as §6, enforced a layer deeper at the bank. Phase 2 replaces t
 `BRANCH_SERVICE_TOKEN` with agent-token→mandate and shifts reads onto that mandate-pinned
 surface (see §12).
 
-### 7.2 Streamlit test client (`ui.py`) — dev only
-A dev dropdown of customers + a chat panel + the snapshot in the sidebar. It is a
-**client of `api.py`**, not a second core. Default port `:8505`. Not a product surface.
+### 7.2 Test interface (`test_console.py`, Streamlit) — first-class dev harness
+A control panel to drive and demo the whole system end-to-end. It is a **client of
+`api.py`** (chat) plus a thin **seeder** against nano-bank (`seed.py`), not a second
+core. Default port `:8505`. Two panes:
+
+1. **Seed** (direct nano-bank API calls via `seed.py`):
+   - **Create customer** (fake Canadian identity + credentials, à la `testing/generator`).
+   - **Open account(s)** for that customer.
+   - **Create transactions** — fund via `deposit`, and optionally seed transfers, so
+     there is real history and balances to talk about. Destination customers/accounts for
+     later transfers can be seeded here too.
+   - Shows the created `customer_id`(s) to pick for the chat pane.
+2. **Chat with the manager** (via `POST /branch/clients/{id}/message`):
+   - **Ask information** — "what's my balance?", "list my recent transactions".
+   - **Instruct transactions** — "transfer $50 from my chequing to Alice", "deposit $200"
+     — the manager executes them through §6.5 and the change is visible on refresh.
+   - Sidebar shows the live snapshot and the act-audit trail (§6.6).
+
+This is the surface that satisfies asks 7 and 8. It is a dev/test tool, not the eventual
+production UI.
 
 ## 8. Data flow
 
 ```
 POST /branch/clients/{id}/message   (BRANCH_SERVICE_TOKEN)
-  → api.py authenticates, derives customer_id
+  → api.py authenticates, derives customer_id, resolves that customer's nano-bank JWT
   → assist(customer_id, message, thread_id):
-       open MCP session bound to customer_id (X-Nano-Customer header)
+       open MCP session bound to customer_id + token (X-Nano-Customer, X-Nano-Token)
        snapshot = MCP get_profile/accounts/transactions/cards   (server-side)
        memories = MCP recall(...)                                (server-side)
        context hook injects snapshot + memories, bounds window
-       ReAct loop on GLM (ollama.com/v1); read tools hit Postgres via MCP
+       ReAct loop on GLM (ollama.com/v1):
+         read tools  → Postgres (customer-filtered)  via MCP
+         act tools   → guardrails (cap/audit) → nano-bank API :8081 (bound token) via MCP
        MCP remember(request), remember(answer), remember(salient facts)
   → {answer, thread_id}
 ```
@@ -204,9 +280,13 @@ POST /branch/clients/{id}/message   (BRANCH_SERVICE_TOKEN)
 - **DB:** read-only connection; a tool failure returns an error string so the agent
   degrades (answers from memory/known context) rather than crashing.
 - **Memory:** writes never raise (mirrors `desktop_agent.remember`).
-- **Unknown customer_id:** `404` from the API / a notice in the test UI.
+- **Unknown customer_id:** `404` from the API / a notice in the test console.
 - **MCP:** if the customer-bound session cannot open, the request fails closed (no
   unscoped access is ever attempted).
+- **Act:** over-cap or an account not owned by the bound customer is refused *before*
+  the bank call and audited; a nano-bank rejection (insufficient funds, etc.) surfaces
+  as a clear message, is audited, and never leaves the local view inconsistent (the bank
+  is the source of truth).
 
 ## 10. Testing
 
@@ -216,12 +296,18 @@ POST /branch/clients/{id}/message   (BRANCH_SERVICE_TOKEN)
   - Model resolver: primary-ok, primary-fails-fallback-ok, both-fail (mocked probe).
   - MCP scoping: a tool call is answered only for the header-bound customer; a
     `customer_id` injected into tool args is ignored.
+  - **Act guardrails:** over-cap refused; act tool naming an account not owned by the
+    bound customer refused; both audited; token never sourced from tool args.
   - The DB-read layer's SQL (§6.3) against a seeded test DB (or fixture).
 - **Integration**
-  - Seed a client via `testing/generator`; `POST` to the a2a `/message`; assert the
-    answer cites the client's real balance and that memory persists across two calls
-    (turn 2 can recall a fact from turn 1).
-- **Health:** `GET /health` (and a `--health` CLI) probe ollama-cloud + Qdrant + Postgres.
+  - `seed.py` creates a customer + account + a funding deposit; `POST` to the a2a
+    `/message` "what's my balance?" cites the real balance; memory persists across two
+    calls (turn 2 recalls a turn-1 fact).
+  - **Act end-to-end:** seed two customers; instruct the manager "transfer $X to
+    <other>"; assert nano-bank balances moved by exactly $X, an audit row exists, and a
+    retry with the same instruction does not double-spend (idempotency).
+- **Health:** `GET /health` (and a `--health` CLI) probe ollama-cloud + Qdrant + Postgres
+  + nano-bank API.
 
 ## 11. Config (`.env.example`)
 
@@ -234,34 +320,44 @@ POST /branch/clients/{id}/message   (BRANCH_SERVICE_TOKEN)
 | `QDRANT_URL` | `http://qdrant:6333` (in-network); `http://localhost:6335` from host | project-local Qdrant container (not ragu) |
 | `QDRANT_COLLECTION` | `nano_manager_memory` | memory collection |
 | `DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD` | viewer defaults, but see note | read-only DB access |
-| `NANO_BANK_API` | `http://localhost:8081` (host) | reserved for Phase 2 (act) |
+| `NANO_BANK_API` | `http://localhost:8081` (host) | act calls (§6.5) + seed login |
 | `BRANCH_SERVICE_TOKEN` | — | a2a bearer for calling agents |
+| `ACT_MAX_PER_TX` | e.g. `1000` | per-transaction amount cap (§6.6) |
+| `ACT_CONFIRM` | `false` | require explicit confirm before an act (§6.6) |
 | `MCP_URL` | `http://mcp:8087/mcp` (in-network only) | unpublished MCP server |
-| `BRANCH_PORT` / `UI_PORT` | `8086` / `8505` | API / test-UI ports (published) |
+| `BRANCH_PORT` / `CONSOLE_PORT` | `8086` / `8505` | API / test-console ports (published) |
+
+The seeded customers' nano-bank credentials are held server-side by `api.py`/`seed.py`
+(keyed by `customer_id`) to mint the `X-Nano-Token`; they are never exposed to the LLM.
 
 **Container-networking note.** Inside the stack, services address each other by name
-(`qdrant`, `mcp`) over the private network; only `api`/`ui` publish to the host. The
+(`qdrant`, `mcp`) over the private network; only `api`/`console` publish to the host. The
 nano-bank Postgres runs in Kind and is reached via a **host** `kubectl port-forward`, so
 from inside a container `DB_HOST` is **`host.containers.internal`** (podman), *not* the
 viewer's `::1` — the `::1` default only applies when running the manager directly on the
-host. Same for `NANO_BANK_API` in Phase 2.
+host. Same for `NANO_BANK_API`.
 
 ## 12. Out of scope (later phases)
 
-- **Phase 2 — Act + real Agentic-Branch auth (builds on PR #19 `agentic-banking`):**
-  - Replace the shared `BRANCH_SERVICE_TOKEN` with the **mandate + agent-token** flow:
-    the manager authenticates as a registered agent, exchanges its secret for a
-    5-minute pointer JWT, and operates strictly within a customer-granted mandate that
-    is revocable in real time.
+Phase 1 already *acts* (§6.5) under simple guardrails and a seeded customer token. What
+is deferred:
+
+- **Phase 2 — real Agentic-Branch auth + governance hardening (builds on PR #19
+  `agentic-banking`):**
+  - Replace the shared `BRANCH_SERVICE_TOKEN` **and** the Phase-1 seeded-customer-token
+    with the **mandate + agent-token** flow: the manager authenticates as a registered
+    agent, exchanges its secret for a 5-minute pointer JWT, and operates strictly within
+    a customer-granted, real-time-**revocable** mandate.
   - **Shift reads** from Phase-1's direct DB access onto the bank's **mandate-pinned
     agent surface** (`GET /api/v1/agent/account|transactions`, no account parameter) for
     defense-in-depth + append-only `agent_actions` audit.
-  - **Act:** bounded money movement via `POST /api/v1/agent/transfers` (caps, allowlist,
-    idempotency enforced by the bank's `policy.rs`), fronted by our governance/confirmation.
+  - **Move the act path** from the customer-authed `POST /api/v1/transactions/transfer`
+    onto the mandate-scoped `POST /api/v1/agent/transfers`, whose caps/allowlist/
+    idempotency are enforced by the bank's `policy.rs` — replacing our simple §6.6 cap.
   - Reconcile with PR #19's existing `mcp/` server (a thin MCP wrapper over the mandate
     agent API): our `mcp_server.py` adds the RAG memory + aggregated client snapshot;
     the two should converge rather than duplicate.
 - **Phase 3 — Proactive:** a monitor scanning the client picture for signals
-  (low balance, unusual activity) and surfacing alerts.
-- The real human-facing UI (this phase ships only the dev test client).
+  (low balance, unusual activity) and surfacing alerts, and acting on its own.
+- The real human-facing UI (this phase ships only the dev test console).
 - stdio-per-session MCP isolation (§6.2 hardening path).
