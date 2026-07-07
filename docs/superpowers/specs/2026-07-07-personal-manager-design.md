@@ -117,14 +117,18 @@ server**. This is the security spine of the design.
 - **DB-read (Postgres, read-only connection):**
   `get_profile()`, `get_accounts()`, `get_transactions(limit)`, `get_cards()`.
 - **RAG (Qdrant):** `recall(query, k)`, `remember(fact, kind)`.
-- **Act (nano-bank API, §6.5):** `transfer(to_account, amount, memo?)`,
-  `deposit(to_account, amount)`, `withdraw(from_account, amount)`.
+- **Act — propose only (nano-bank API, §6.5):** `propose_transfer(to_account, amount,
+  memo?)`, `propose_deposit(to_account, amount)`, `propose_withdraw(from_account,
+  amount)`. These **do not move money** — they record a pending action and return a
+  confirmation id + human-readable summary for the user/caller to approve (§6.6).
 
 None of these take a `customer_id` **or an auth token**. The agent therefore cannot
 *express* access to — or action on — another customer. The scoping is absent from the
 tool schema, not a prompt rule. For act tools the LLM supplies only the amount, the
 destination, and *which of the bound customer's own accounts* to use; the owning
-customer and the credential are bound server-side (§6.2, §6.5).
+customer and the credential are bound server-side (§6.2, §6.5). Crucially, **no tool the
+LLM can call executes a payment** — execution is a separate deterministic step gated on
+explicit confirmation (§6.6), so the model can propose but never unilaterally act.
 
 ### 6.2 Customer binding — HTTP + trusted header (enforced in code)
 - One long-running **streamable-HTTP** MCP server, **not published to the host** —
@@ -167,47 +171,72 @@ Same interface as the harness's `BiTemporalMemory` (`store` / `invalidate` /
 - **What gets written each turn:** the user request, the assistant answer, and any
   salient facts — all through the customer-bound session.
 
-### 6.5 Acting (writes) — nano-bank API, customer-token-bound
-The act tools (`transfer` / `deposit` / `withdraw`) are the only path that mutates
-money, and they go through the **existing authenticated nano-bank API** on `:8081`
+### 6.5 Acting (writes) — two-phase, customer-token-bound
+Money movement goes through the **existing authenticated nano-bank API** on `:8081`
 (`POST /api/v1/transactions/{deposit,withdrawal,transfer}`), so all ledger triggers,
 balance/limit checks and double-entry invariants hold — the manager never writes to
-Postgres directly.
+Postgres directly. It is **two-phase**, and the two phases have different callers:
 
-- **Auth is bound, not passed by the LLM.** Each act call uses the `X-Nano-Token` bound
-  to the session (§6.2) — the seeded customer's nano-bank JWT, which nano-bank already
+1. **Propose (LLM-callable).** A `propose_*` tool (§6.1) validates the request against
+   the guardrails (§6.6), records a **pending action** — `{id, customer_id, kind, from,
+   to, amount, memo, created_at, expires_at, status=pending}` — and returns the id + a
+   summary. **No bank call happens here.**
+2. **Execute (NOT LLM-callable).** A separate server-side `execute_action(id)` — reached
+   only via the deterministic confirm path (§7.1 endpoint / console button) — re-checks
+   the pending action (unexpired, still within guardrails, still owned) and *then* calls
+   nano-bank with the **stored** parameters. The MCP server exposes `execute_action` only
+   to the confirm route, never as an LLM tool, so the model cannot self-confirm.
+
+- **Auth is bound, not passed by the LLM.** The execute call uses the `X-Nano-Token`
+  bound to the session (§6.2) — the seeded customer's nano-bank JWT, which nano-bank
   requires for money movement (PR #16 gated transfers behind customer auth). Because the
-  token *is* the customer, the bank itself guarantees writes only touch that customer's
-  accounts. The LLM cannot supply or swap the token.
-- **Source-account guard.** Before calling nano-bank, the MCP server verifies the
-  `from`/`to` account the LLM named actually belongs to the bound customer (via the §6.3
-  read path); a mismatch is refused and audited (§6.6) — defense-in-depth on top of the
-  bank's own auth.
-- **Idempotency.** Transfers pass an `idempotency_key` (the bank honors it) so a retried
-  tool call cannot double-spend.
+  token *is* the customer, the bank guarantees writes only touch that customer's
+  accounts. The LLM can neither supply nor swap the token.
+- **Source-account guard.** At both propose and execute, the MCP server verifies the
+  `from`/`to` account belongs to the bound customer (via the §6.3 read path); a mismatch
+  is refused and audited (§6.6) — defense-in-depth on top of the bank's own auth.
+- **Idempotency.** Execution derives the bank `idempotency_key` from the pending-action
+  `id`, so a double-confirm (or a retried confirm) cannot double-spend; an already-
+  executed action returns its original result.
 
-### 6.6 Guardrails (simple, Phase 1)
+### 6.6 Guardrails (Phase 1) — confirmation is mandatory
 Money movement by an AI needs a floor of governance even before the full mandate system
-(§12). Phase 1 keeps it deliberately small:
-- **Amount cap.** `ACT_MAX_PER_TX` (env) refuses any single transaction above the cap
-  *before* it reaches the bank.
-- **Append-only audit.** Every act decision — **allow and deny** — is recorded
-  (customer, tool, amount, destination, outcome, reason, timestamp) to an append-only
-  store (a dedicated Qdrant collection / table). This is the vocabulary Phase 2's
-  mandate `agent_actions` audit will subsume.
-- **Optional confirmation.** `ACT_CONFIRM` (env, default **off** in the dev harness so
-  the test interface can drive fluidly) gates each act behind an explicit
-  confirm step when enabled.
-- **Explicit-instruction only.** Act tools are invoked only in response to a client
+(§12). Phase 1:
+- **Mandatory confirmation (both surfaces).** *Every* act requires an explicit
+  confirmation of the exact proposed action before execution — for the human test
+  console **and** for A2A callers alike. There is no "auto-execute" mode; the LLM's
+  proposal is never sufficient on its own. Confirmation approves a specific pending-action
+  `id`, so the amount/destination cannot change between propose and execute.
+- **Pending-action TTL.** A proposal expires after `CONFIRM_TTL_S` (env); a stale or
+  already-consumed id cannot be confirmed.
+- **Amount cap.** `ACT_MAX_PER_TX` (env) refuses any single transaction above the cap at
+  propose time (and re-checks at execute).
+- **Append-only audit.** Every step — **propose, confirm/execute, and every deny** — is
+  recorded (customer, kind, amount, destination, outcome, reason, timestamp) to an
+  append-only store (a dedicated Qdrant collection / table). This is the vocabulary
+  Phase 2's mandate `agent_actions` audit will subsume.
+- **Explicit-instruction only.** `propose_*` tools fire only in response to a client
   instruction in the conversation; the manager does not act proactively (Phase 3).
 
 ## 7. Surfaces
 
 ### 7.1 Agentic Branch API (`api.py`, FastAPI) — primary
 - `POST /branch/clients/{customer_id}/message` — body `{message, thread_id?}` →
-  `{answer, thread_id}`.
+  `{answer, thread_id, pending_action?}`. When the manager proposes a transaction, the
+  response carries `pending_action = {id, kind, from, to, amount, memo, expires_at,
+  summary}` and money has **not** moved yet.
+- `POST /branch/clients/{customer_id}/actions/{action_id}/confirm` → executes the pending
+  action (§6.5 step 2) and returns the bank result, or an error if expired/consumed/over
+  guardrail. This is the **only** way an act completes — same for humans and agents.
+- `POST /branch/clients/{customer_id}/actions/{action_id}/cancel` → discards a pending
+  action (audited).
 - `GET  /branch/clients/{customer_id}/profile` → the snapshot.
 - `GET  /health` → resolver + Qdrant + Postgres status.
+
+**Confirmation is symmetric across surfaces.** An A2A caller must make the explicit
+`…/confirm` call (a deliberate second request), exactly as the human clicks Confirm in
+the console — the two-phase design (§6.5) makes "confirm before acting" a property of the
+protocol, not a UI nicety, so it cannot be skipped by any caller.
 - **Auth (Phase 1):** deliberately simple — a shared `BRANCH_SERVICE_TOKEN` bearer for
   calling agents. The `customer_id` from the (authenticated) request binds the MCP
   session (§6.2).
@@ -249,8 +278,10 @@ core. Default port `:8505`. Two panes:
    - Shows the created `customer_id`(s) to pick for the chat pane.
 2. **Chat with the manager** (via `POST /branch/clients/{id}/message`):
    - **Ask information** — "what's my balance?", "list my recent transactions".
-   - **Instruct transactions** — "transfer $50 from my chequing to Alice", "deposit $200"
-     — the manager executes them through §6.5 and the change is visible on refresh.
+   - **Instruct transactions** — "transfer $50 from my chequing to Alice", "deposit $200".
+     The manager **proposes** (§6.5); the console renders the proposed action with
+     **Confirm / Cancel** buttons that call the confirm/cancel endpoints. Money moves only
+     after Confirm; the change is visible on refresh.
    - Sidebar shows the live snapshot and the act-audit trail (§6.6).
 
 This is the surface that satisfies asks 7 and 8. It is a dev/test tool, not the eventual
@@ -267,10 +298,18 @@ POST /branch/clients/{id}/message   (BRANCH_SERVICE_TOKEN)
        memories = MCP recall(...)                                (server-side)
        context hook injects snapshot + memories, bounds window
        ReAct loop on GLM (ollama.com/v1):
-         read tools  → Postgres (customer-filtered)  via MCP
-         act tools   → guardrails (cap/audit) → nano-bank API :8081 (bound token) via MCP
+         read tools     → Postgres (customer-filtered) via MCP
+         propose_* tools → guardrails (cap/audit) → pending action recorded (NO bank call)
        MCP remember(request), remember(answer), remember(salient facts)
-  → {answer, thread_id}
+  → {answer, thread_id, pending_action?}      # if the manager proposed a transaction
+
+# execution is a SEPARATE, deterministic request (human clicks Confirm / agent calls confirm):
+POST /branch/clients/{id}/actions/{action_id}/confirm
+  → api.py (customer+token bound) → MCP execute_action(id):
+       re-check unexpired + guardrails + ownership
+       → nano-bank API :8081 (bound token, idempotency_key = action id)
+       → audit execute
+  → {result}                                  # money has now moved
 ```
 
 ## 9. Error handling
@@ -283,10 +322,13 @@ POST /branch/clients/{id}/message   (BRANCH_SERVICE_TOKEN)
 - **Unknown customer_id:** `404` from the API / a notice in the test console.
 - **MCP:** if the customer-bound session cannot open, the request fails closed (no
   unscoped access is ever attempted).
-- **Act:** over-cap or an account not owned by the bound customer is refused *before*
-  the bank call and audited; a nano-bank rejection (insufficient funds, etc.) surfaces
-  as a clear message, is audited, and never leaves the local view inconsistent (the bank
-  is the source of truth).
+- **Act:** over-cap or an account not owned by the bound customer is refused at propose
+  time and audited; a nano-bank rejection (insufficient funds, etc.) surfaces as a clear
+  message, is audited, and never leaves the local view inconsistent (the bank is the
+  source of truth).
+- **Confirm:** an expired, cancelled, unknown, or already-executed `action_id` returns a
+  clear error and moves no money (idempotent; the original result is returned for a
+  duplicate confirm of an executed action).
 
 ## 10. Testing
 
@@ -298,14 +340,18 @@ POST /branch/clients/{id}/message   (BRANCH_SERVICE_TOKEN)
     `customer_id` injected into tool args is ignored.
   - **Act guardrails:** over-cap refused; act tool naming an account not owned by the
     bound customer refused; both audited; token never sourced from tool args.
+  - **Confirmation is mandatory:** a `propose_*` call moves no money and no `execute_action`
+    tool is reachable by the LLM; only the confirm route executes; an expired/cancelled id
+    will not execute.
   - The DB-read layer's SQL (§6.3) against a seeded test DB (or fixture).
 - **Integration**
   - `seed.py` creates a customer + account + a funding deposit; `POST` to the a2a
     `/message` "what's my balance?" cites the real balance; memory persists across two
     calls (turn 2 recalls a turn-1 fact).
-  - **Act end-to-end:** seed two customers; instruct the manager "transfer $X to
-    <other>"; assert nano-bank balances moved by exactly $X, an audit row exists, and a
-    retry with the same instruction does not double-spend (idempotency).
+  - **Act end-to-end (two-phase):** seed two customers; instruct "transfer $X to <other>";
+    assert the `/message` response is a `pending_action` and **balances are unchanged**;
+    then `…/confirm` and assert balances moved by exactly $X and an audit row exists; a
+    second `…/confirm` of the same id does **not** double-spend (idempotent).
 - **Health:** `GET /health` (and a `--health` CLI) probe ollama-cloud + Qdrant + Postgres
   + nano-bank API.
 
@@ -323,7 +369,7 @@ POST /branch/clients/{id}/message   (BRANCH_SERVICE_TOKEN)
 | `NANO_BANK_API` | `http://localhost:8081` (host) | act calls (§6.5) + seed login |
 | `BRANCH_SERVICE_TOKEN` | — | a2a bearer for calling agents |
 | `ACT_MAX_PER_TX` | e.g. `1000` | per-transaction amount cap (§6.6) |
-| `ACT_CONFIRM` | `false` | require explicit confirm before an act (§6.6) |
+| `CONFIRM_TTL_S` | `300` | how long a proposed action can wait for confirmation (§6.6) |
 | `MCP_URL` | `http://mcp:8087/mcp` (in-network only) | unpublished MCP server |
 | `BRANCH_PORT` / `CONSOLE_PORT` | `8086` / `8505` | API / test-console ports (published) |
 
