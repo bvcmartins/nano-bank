@@ -30,19 +30,28 @@ Two consumers, one core:
 ## 3. Layout
 
 New directory in the nano-bank repo. The manager is a Python service (the repo's
-Rust API stays untouched in Phase 1).
+Rust API stays untouched in Phase 1). **All components are containerized** and run as
+a project-local stack (following the `testing/` harness's podman + Containerfile
+pattern), including a **dedicated Qdrant container local to this project** (not ragu).
 
 ```
 agent/
-  mcp_server.py     # MCP server: the ONLY gateway to DB + RAG, customer-scoped IN CODE
-  nano_manager.py   # agent core: model factory, LangGraph agent, MCP-client wiring, assist()
-  api.py            # FastAPI — the PRIMARY deliverable (the manager endpoint)
-  ui.py             # Streamlit — TEST/dev harness only; talks to api.py like any other client
+  mcp_server.py         # MCP server: the ONLY gateway to DB + RAG, customer-scoped IN CODE
+  nano_manager.py       # agent core: model factory, LangGraph agent, MCP-client wiring, assist()
+  api.py                # FastAPI — the PRIMARY deliverable (the manager endpoint)
+  ui.py                 # Streamlit — TEST/dev harness only; talks to api.py like any other client
+  Containerfile.api     # api.py (+ nano_manager) image
+  Containerfile.mcp     # mcp_server.py image
+  Containerfile.ui      # ui.py image (test client)
+  compose.yaml          # api + mcp + qdrant (+ optional ui); a project-local network
   requirements.txt
   .env.example
   README.md
-  tests/            # unit + integration tests
+  tests/                # unit + integration tests
 ```
+
+Containers share a **private network**. Only `api` (and, in dev, `ui`) publish ports
+to the host; `mcp` and `qdrant` are reachable **only inside the network** (see §6.2).
 
 ## 4. Model factory (the one backend seam)
 
@@ -103,15 +112,17 @@ None of these take a `customer_id`. The agent therefore cannot *express* access 
 another customer — the scoping is absent from the tool schema, not a prompt rule.
 
 ### 6.2 Customer binding — HTTP + trusted header (enforced in code)
-- One long-running **streamable-HTTP** MCP server bound to **localhost** only.
+- One long-running **streamable-HTTP** MCP server, **not published to the host** —
+  reachable only by the `api` service over the private container network (§3).
 - `api.py`, after authenticating the request (§7), opens a **per-request** MCP client
   session passing `customer_id` in a **trusted header** (e.g. `X-Nano-Customer`) that
   the LLM never sees or sets.
 - The MCP server reads that header and stamps the bound `customer_id` into **every**
   SQL `WHERE customer_id = …` and **every** Qdrant payload filter. Any `customer_id`
   arriving in tool arguments is ignored — the header is the sole source of truth.
-- Trust boundary: only `api.py` can reach the MCP port (localhost). The LLM influences
-  the server only through tool *arguments*, which contain no customer.
+- Trust boundary: **network isolation** — only the `api` container can reach the MCP
+  container (the MCP port is unpublished). The LLM influences the server only through
+  tool *arguments*, which carry no customer.
 - **Hardening path (not Phase 1):** a stdio MCP server spawned per session with
   `NANO_CUSTOMER_ID` in its env gives per-process isolation; documented for later.
 
@@ -146,14 +157,26 @@ Same interface as the harness's `BiTemporalMemory` (`store` / `invalidate` /
   `{answer, thread_id}`.
 - `GET  /branch/clients/{customer_id}/profile` → the snapshot.
 - `GET  /health` → resolver + Qdrant + Postgres status.
-- **Auth (Phase 1):** a shared `BRANCH_SERVICE_TOKEN` bearer for calling agents. The
-  `customer_id` from the (authenticated) request binds the MCP session (§6.2).
+- **Auth (Phase 1):** deliberately simple — a shared `BRANCH_SERVICE_TOKEN` bearer for
+  calling agents. The `customer_id` from the (authenticated) request binds the MCP
+  session (§6.2).
 - Default port `:8086`.
 
 **Caller vs agent scoping.** The external caller still names `customer_id` in the URL;
 proving a *caller* may act for that client is **Phase-2 caller-authorization**. Phase-1's
 guarantee is narrower and enforced: the **LLM/agent** cannot deviate from the bound
 customer.
+
+**The real Agentic-Branch auth (PR #19, `agentic-banking`).** The mature auth model for
+this surface is the mandate system already in flight: a customer-granted, scoped,
+expiring, **revocable mandate** is the single source of truth; an agent presents a
+5-minute **agent-token** that is a *pointer* to a mandate, and the bank re-reads the
+mandate row on every call (immediate revocation, no blocklist). Notably the bank's own
+agent read surface — `GET /api/v1/agent/account`, `GET /api/v1/agent/transactions` — is
+**mandate-pinned with no account parameter**, which is the same "scoping outside the
+agent" invariant as §6, enforced a layer deeper at the bank. Phase 2 replaces the shared
+`BRANCH_SERVICE_TOKEN` with agent-token→mandate and shifts reads onto that mandate-pinned
+surface (see §12).
 
 ### 7.2 Streamlit test client (`ui.py`) — dev only
 A dev dropdown of customers + a chat panel + the snapshot in the sidebar. It is a
@@ -208,19 +231,36 @@ POST /branch/clients/{id}/message   (BRANCH_SERVICE_TOKEN)
 | `OLLAMA_BASE_URL` | `https://ollama.com/v1` | OpenAI-compat endpoint |
 | `MANAGER_MODEL` | `glm-5.2` | primary model |
 | `MANAGER_FALLBACK_MODEL` | `glm-4.7` | fallback model |
-| `QDRANT_URL` | `http://localhost:6335` | dedicated local Qdrant (not ragu) |
+| `QDRANT_URL` | `http://qdrant:6333` (in-network); `http://localhost:6335` from host | project-local Qdrant container (not ragu) |
 | `QDRANT_COLLECTION` | `nano_manager_memory` | memory collection |
-| `DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD` | viewer defaults (`::1`, …) | read-only DB access |
-| `NANO_BANK_API` | `http://localhost:8081` | reserved for Phase 2 (act) |
+| `DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD` | viewer defaults, but see note | read-only DB access |
+| `NANO_BANK_API` | `http://localhost:8081` (host) | reserved for Phase 2 (act) |
 | `BRANCH_SERVICE_TOKEN` | — | a2a bearer for calling agents |
-| `MCP_URL` | `http://localhost:8087/mcp` | localhost-only MCP server |
-| `BRANCH_PORT` / `UI_PORT` | `8086` / `8505` | API / test-UI ports |
+| `MCP_URL` | `http://mcp:8087/mcp` (in-network only) | unpublished MCP server |
+| `BRANCH_PORT` / `UI_PORT` | `8086` / `8505` | API / test-UI ports (published) |
+
+**Container-networking note.** Inside the stack, services address each other by name
+(`qdrant`, `mcp`) over the private network; only `api`/`ui` publish to the host. The
+nano-bank Postgres runs in Kind and is reached via a **host** `kubectl port-forward`, so
+from inside a container `DB_HOST` is **`host.containers.internal`** (podman), *not* the
+viewer's `::1` — the `::1` default only applies when running the manager directly on the
+host. Same for `NANO_BANK_API` in Phase 2.
 
 ## 12. Out of scope (later phases)
 
-- **Phase 2 — Act:** API-write tools (transfer/deposit/withdrawal/card) via the
-  authenticated nano-bank API on :8081, behind Agentic Governance (confirmation,
-  amount limits, audit log), plus **caller-authorization** (§7.1).
+- **Phase 2 — Act + real Agentic-Branch auth (builds on PR #19 `agentic-banking`):**
+  - Replace the shared `BRANCH_SERVICE_TOKEN` with the **mandate + agent-token** flow:
+    the manager authenticates as a registered agent, exchanges its secret for a
+    5-minute pointer JWT, and operates strictly within a customer-granted mandate that
+    is revocable in real time.
+  - **Shift reads** from Phase-1's direct DB access onto the bank's **mandate-pinned
+    agent surface** (`GET /api/v1/agent/account|transactions`, no account parameter) for
+    defense-in-depth + append-only `agent_actions` audit.
+  - **Act:** bounded money movement via `POST /api/v1/agent/transfers` (caps, allowlist,
+    idempotency enforced by the bank's `policy.rs`), fronted by our governance/confirmation.
+  - Reconcile with PR #19's existing `mcp/` server (a thin MCP wrapper over the mandate
+    agent API): our `mcp_server.py` adds the RAG memory + aggregated client snapshot;
+    the two should converge rather than duplicate.
 - **Phase 3 — Proactive:** a monitor scanning the client picture for signals
   (low balance, unusual activity) and surfacing alerts.
 - The real human-facing UI (this phase ships only the dev test client).
