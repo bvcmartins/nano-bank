@@ -47,7 +47,8 @@ async def _default_confirm(settings, customer_id, token, action_id, cancel=False
 
 
 def create_app(settings: Settings, *, assist_fn=nano_manager.assist,
-               confirm_fn=_default_confirm, token_resolver: Optional[TokenResolver] = None) -> FastAPI:
+               confirm_fn=_default_confirm, token_resolver: Optional[TokenResolver] = None,
+               seed_fn=None) -> FastAPI:
     app = FastAPI(title="nano-bank personal manager")
 
     def _auth(authorization: Optional[str]):
@@ -85,5 +86,13 @@ def create_app(settings: Settings, *, assist_fn=nano_manager.assist,
     async def cancel(cid: str, aid: str, authorization: str = Header(None)):
         _auth(authorization)
         return await confirm_fn(settings, cid, _token(cid), aid, cancel=True)
+
+    if seed_fn is not None:
+        @app.post("/branch/seed")
+        def seed(authorization: str = Header(None)):
+            """Dev-only: seed customers/accounts/transactions and register their creds
+            in this process so the confirm path can mint their nano-bank token."""
+            _auth(authorization)
+            return seed_fn()
 
     return app

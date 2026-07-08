@@ -43,3 +43,17 @@ def test_confirm_executes():
 
 def test_health_ok():
     assert _app().get("/health").status_code == 200
+
+
+def test_seed_route_requires_auth_and_returns_customers():
+    settings = Settings.from_env({"BRANCH_SERVICE_TOKEN": "svc"})
+    app = create_app(settings, seed_fn=lambda: {"customers": [{"customer_id": "c1"}]})
+    c = TestClient(app)
+    assert c.post("/branch/seed").status_code == 401
+    r = c.post("/branch/seed", headers={"Authorization": "Bearer svc"})
+    assert r.status_code == 200 and r.json()["customers"][0]["customer_id"] == "c1"
+
+
+def test_no_seed_route_when_seed_fn_absent():
+    c = _app()
+    assert c.post("/branch/seed", headers={"Authorization": "Bearer svc"}).status_code == 404

@@ -1,11 +1,13 @@
 from __future__ import annotations
+import os
 import httpx
 import streamlit as st
 
 from agent.config import Settings
 
 settings = Settings.from_env()
-API = f"http://localhost:{settings.branch_port}"
+# In-container the api is reachable by service name; on the host it's localhost.
+API = os.environ.get("MANAGER_API_URL", f"http://localhost:{settings.branch_port}")
 HDR = {"Authorization": f"Bearer {settings.branch_service_token}"}
 
 st.set_page_config(page_title="nano-bank manager — test console", layout="wide")
@@ -16,9 +18,9 @@ seed_col, chat_col = st.columns([1, 2])
 with seed_col:
     st.subheader("Seed")
     if st.button("Seed demo (2 customers + funded account)"):
-        from agent.bank import BankClient
-        from agent import seed
-        out = seed.seed_demo(BankClient(settings.nano_bank_api))
+        # Seed THROUGH the api so it registers creds for the confirm path.
+        r = httpx.post(f"{API}/branch/seed", headers=HDR, timeout=120)
+        out = r.json()
         st.session_state["customers"] = out["customers"]
         st.success(f"seeded {len(out['customers'])} customers")
     customers = st.session_state.get("customers", [])

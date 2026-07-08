@@ -1,0 +1,42 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    networks: [nano]
+    # no published ports — reachable only in-network
+  mcp:
+    build: { context: ., dockerfile: Containerfile.mcp }
+    environment:
+      - QDRANT_URL=http://qdrant:6333
+      - DB_HOST=host.containers.internal
+      - NANO_BANK_API=http://host.containers.internal:8081
+      - ACT_MAX_PER_TX=${ACT_MAX_PER_TX:-1000}
+      - CONFIRM_TTL_S=${CONFIRM_TTL_S:-300}
+    networks: [nano]
+    depends_on: [qdrant]
+    # no published ports
+  api:
+    build: { context: ., dockerfile: Containerfile.api }
+    environment:
+      - MCP_URL=http://mcp:8087/mcp
+      - OLLAMA_API_KEY=${OLLAMA_API_KEY}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-https://ollama.com/v1}
+      - MANAGER_MODEL=${MANAGER_MODEL:-glm-5.2}
+      - MANAGER_FALLBACK_MODEL=${MANAGER_FALLBACK_MODEL:-glm-4.7}
+      - BRANCH_SERVICE_TOKEN=${BRANCH_SERVICE_TOKEN}
+      - NANO_BANK_API=http://host.containers.internal:8081
+      - DB_HOST=host.containers.internal
+    ports: ["8086:8086"]
+    networks: [nano]
+    depends_on: [mcp]
+  console:
+    build: { context: ., dockerfile: Containerfile.console }
+    environment:
+      - MANAGER_API_URL=http://api:8086
+      - BRANCH_SERVICE_TOKEN=${BRANCH_SERVICE_TOKEN}
+      - NANO_BANK_API=http://host.containers.internal:8081
+    ports: ["8505:8505"]
+    networks: [nano]
+    depends_on: [api]
+
+networks:
+  nano: {}
