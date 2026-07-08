@@ -145,6 +145,11 @@ either backend's account scheme.
 - `src/core/tables/` — the PostgreSQL DDL (loaded by the Kind init Job).
 - `k8s/` — Kind cluster + Postgres manifests.
 - `testing/` — a 3-container harness (data generator + payment-network sim + viewer).
+- `agent/` — the Python **personal manager** (Phase 1): a GLM/Ollama-cloud LangGraph
+  agent behind a customer-scoped MCP gateway (DB reads + Qdrant memory + two-phase,
+  confirm-gated money movement), exposed as an agent-to-agent FastAPI endpoint (:8086)
+  with a Streamlit test console (:8505). See `agent/README.md` and
+  `docs/superpowers/specs/2026-07-07-personal-manager-design.md`.
 
 ## Running the stack
 
