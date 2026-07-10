@@ -236,6 +236,44 @@ The first **external payment rail**, built on a small `Rail` port that sits
   the ACSS-style `INTERAC_SETTLEMENT`→`Bank` settlement sweep (lands with the AFT
   rail), and Request Money.
 
+## AFT / EFT batch rail
+
+The second external rail (`handlers/aft.rs`, `rails/aft.rs`, `aft/cpa005.rs`) —
+Canada's **batch** rail (Automated Funds Transfer over ACSS). Unlike Interac's
+per-message model, AFT is file-based and batched. Design spec:
+`docs/specs/2026-07-05-aft-eft-rail-design.md`.
+
+- **Own system accounts (decoupled from cards/Interac):** `aft@nano.bank` owns
+  `AFT_CLEARING` (chequing) + `AFT_SETTLEMENT` (savings), $1T overdraft. Reuses
+  the `Rail` port (`hold`/`release`/`refund`/`accept_inbound`) for the money moves.
+- **Two products:** direct-deposit **credits** (pay external accounts / receive
+  inbound) and **pre-authorized debits (PAD)**, gated by a `pad_mandates` record
+  (a payer authorizes a biller, with an amount cap; revocable).
+- **Lifecycle:** originate credits/debits → they accrue in the single open
+  outbound batch → `POST /aft/batches/:id/submit` closes it and emits a real
+  **CPA-005-style fixed-width file** (`aft/cpa005.rs`, round-trippable) →
+  `POST /aft/network/settle/:batch` applies the per-entry legs and posts the
+  **settlement sweep** (external direct-deposit cash → `Bank` via the Ledger
+  port; per-entry posts are `Payable`/`Payable` reclasses) → NSF entries are
+  `rejected`; settled entries can be **returned** via `POST /aft/network/returns`
+  (a returns file that reverses them).
+- **Inbound:** `POST /aft/network/inbound-batch` ingests a CPA-005 file targeting
+  nano-bank customers (credits `accept_inbound`; external PAD debits `hold`+
+  `release`, or `rejected` on NSF).
+- **Auth planes:** customer (`/aft/mandates`, `/aft/credits`, `/aft/debits`,
+  `GET /aft/entries`); service-token **network/admin** (`/aft/batches`,
+  `/aft/batches/:id/submit`, `/aft/network/settle|inbound-batch|returns`) — the
+  shared outbound batch is a bank-operational concept, so listing and cutting it
+  are bank ops, not customer ops. Driven by `testing/aft/aft_simulator.py` (plays
+  the bank cutoff + ACSS). Customers see their own activity via `/aft/entries`.
+  The viewer has an AFT tab.
+- **available_balance:** recomputed on **customer** accounts around rail posts;
+  the AFT system accounts stay at 0 (float on the $1T overdraft) — same rule as
+  Interac.
+- **v1 simplifications:** PAD payers are intra-bank (mandate `payer_account_id`
+  is a nano-bank account); returns match a settled entry by amount +
+  counterparty account; CPA-005 is authentic in shape, not byte-exact.
+
 ## Gotchas
 
 - **DB host is `::1`, not `127.0.0.1`** (dead docker-proxy on IPv4).

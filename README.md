@@ -172,6 +172,7 @@ under `/api/v1`:
 | **Accounts** | `GET`/`POST /accounts`, `GET /accounts/{id}`, `GET /accounts/{id}/balance` |
 | **Transactions** | `POST /transactions/transfer`, `/deposit`, `/withdrawal`, `GET /transactions` |
 | **Interac** | `POST`/`GET /interac/etransfers`, `POST /interac/etransfers/{id}/{claim,decline,cancel}`, `POST`/`GET /interac/autodeposit`, `POST /interac/network/inbound`, `POST /interac/network/etransfers/{id}/settle`, `POST /interac/admin/sweep-expired` |
+| **AFT/EFT** | `POST`/`GET`/`DELETE /aft/mandates`, `POST /aft/credits`, `POST /aft/debits`, `POST /aft/batches/{id}/submit`, `GET /aft/batches`, `GET /aft/entries`, `POST /aft/network/settle/{batch}`, `POST /aft/network/inbound-batch`, `POST /aft/network/returns` |
 | **Security** | `GET /security/sessions`, `GET /security/devices`, `POST /security/devices/trust` |
 | **System** | `GET /health`, `GET /docs` |
 
