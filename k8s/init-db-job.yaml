@@ -29,6 +29,7 @@ data:
     psql -h postgres-service -U nanobank_user -d nano_bank_db -f /scripts/09_aft.sql
     psql -h postgres-service -U nanobank_user -d nano_bank_db -f /scripts/10_lynx.sql
     psql -h postgres-service -U nanobank_user -d nano_bank_db -f /scripts/11_agents.sql
+    psql -h postgres-service -U nanobank_user -d nano_bank_db -f /scripts/11_lending.sql
     psql -h postgres-service -U nanobank_user -d nano_bank_db -f /scripts/12_interac_recipients.sql
     psql -h postgres-service -U nanobank_user -d nano_bank_db -f /scripts/13_interest_accruals.sql
     psql -h postgres-service -U nanobank_user -d nano_bank_db -f /scripts/14_agent_action_ledger.sql
