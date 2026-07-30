@@ -61,6 +61,11 @@ STATEMENT_LINE: dict[str, str] = {
 
 EARNING_ASSET_ROLES: set[str] = {
     "CardReceivable", "OverdraftReceivable", "LoansReceivable", "TreasuryPlacement",
+    # Accrued-but-uncapitalised card interest lives here until month-end
+    # capitalisation reclasses it into CardReceivable; it is an interest-earning
+    # receivable and the balance-sheet counterpart of the InterestIncome already
+    # in the NIM numerator, so it belongs in the earning-asset base.
+    "AccruedInterestReceivable",
 }
 INCOME_ROLES: set[str] = {r for r, l in STATEMENT_LINE.items() if l == "income"}
 EXPENSE_ROLES: set[str] = {r for r, l in STATEMENT_LINE.items() if l == "expense"}

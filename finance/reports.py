@@ -53,14 +53,32 @@ def income_statement(closing: dict, opening: dict) -> dict:
             "total_income": ti, "total_expense": te, "net_income": ti - te}
 
 
+# An annualised net-interest margin outside this band almost always means the
+# earning-asset denominator is too thin for the period (a partial/first period,
+# or an asset class — overdraft/loans/treasury — not yet posting to its granular
+# GL role) rather than a real >35% margin. Surface it so the CFO agent treats
+# the figure as provisional instead of acting on a denominator artefact. Tunable.
+_NIM_PLAUSIBLE_MAX = Decimal("0.35")
+
+
 def nim(closing: dict, opening: dict, days: int) -> dict:
     net_interest = (_flow(closing, opening, "InterestIncome", credit_normal=True)
                     - _flow(closing, opening, "InterestExpense", credit_normal=False))
     avg = Decimal(0)
     for role in roles.EARNING_ASSET_ROLES:
         avg += (opening.get(role, Decimal(0)) + closing.get(role, Decimal(0))) / Decimal(2)
-    margin = (net_interest / avg * (Decimal(365) / Decimal(days))) if avg else Decimal(0)
-    return {"net_interest": net_interest, "avg_earning_assets": avg, "nim": margin}
+
+    if avg <= 0:
+        margin, provisional, reason = Decimal(0), True, "no-earning-assets"
+    elif days <= 0:
+        margin, provisional, reason = Decimal(0), True, "empty-period"
+    else:
+        margin = net_interest / avg * (Decimal(365) / Decimal(days))
+        provisional = abs(margin) > _NIM_PLAUSIBLE_MAX
+        reason = "implausible-margin" if provisional else None
+
+    return {"net_interest": net_interest, "avg_earning_assets": avg,
+            "nim": margin, "provisional": provisional, "reason": reason}
 
 
 def segment_pnl(accruals: list, fees: list, interchange_total: Decimal) -> dict:

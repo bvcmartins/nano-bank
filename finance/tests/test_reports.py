@@ -55,6 +55,35 @@ def test_nim():
     assert out["avg_earning_assets"] == D("1000")
     # annualised: 24/1000 * 365/30
     assert out["nim"] == (D("24") / D("1000") * (D("365") / D("30")))
+    assert out["provisional"] is False               # ~29% margin is plausible
+    assert out["reason"] is None
+
+
+def test_nim_counts_accrued_interest_in_earning_base():
+    # Accrued-but-uncapitalised card interest is an earning asset.
+    opening = _snapshot(AccruedInterestReceivable="400", InterestIncome="0")
+    closing = _snapshot(AccruedInterestReceivable="600", InterestIncome="-10")
+    out = reports.nim(closing, opening, days=30)
+    assert out["avg_earning_assets"] == D("500")     # (400 + 600) / 2
+
+
+def test_nim_flags_thin_denominator_as_provisional():
+    # Full interest income against a sliver of earning assets annualises to an
+    # implausible margin — the report must flag it rather than assert it.
+    opening = _snapshot(CardReceivable="1", InterestIncome="0")
+    closing = _snapshot(CardReceivable="1", InterestIncome="-30")
+    out = reports.nim(closing, opening, days=30)
+    assert out["provisional"] is True
+    assert out["reason"] == "implausible-margin"
+
+
+def test_nim_no_earning_assets_is_provisional_zero():
+    opening = _snapshot(InterestIncome="0")
+    closing = _snapshot(InterestIncome="-30")
+    out = reports.nim(closing, opening, days=30)
+    assert out["nim"] == D("0")
+    assert out["provisional"] is True
+    assert out["reason"] == "no-earning-assets"
 
 
 def test_segment_pnl_reconciles_with_interchange():

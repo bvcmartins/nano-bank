@@ -32,4 +32,5 @@ def test_earning_assets_exclude_cash_reserves():
     assert "CashReserves" not in roles.EARNING_ASSET_ROLES
     assert roles.EARNING_ASSET_ROLES == {
         "CardReceivable", "OverdraftReceivable", "LoansReceivable", "TreasuryPlacement",
+        "AccruedInterestReceivable",
     }
