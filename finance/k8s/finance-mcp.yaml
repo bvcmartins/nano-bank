@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: finance-mcp
+  namespace: nano-bank
+  labels: { app: finance-mcp }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: finance-mcp } }
+  template:
+    metadata: { labels: { app: finance-mcp } }
+    spec:
+      containers:
+      - name: mcp
+        image: nano-finance-mcp:dev
+        imagePullPolicy: Never
+        ports: [ { containerPort: 8088 } ]
+        env:
+        - { name: DB_HOST,       value: postgres-service }
+        - { name: DB_PORT,       value: "5432" }
+        - { name: DB_NAME,       value: nano_bank_db }
+        - { name: DB_USER,       value: nanobank_user }
+        - { name: DB_PASSWORD,   value: "secure_nano_password_2024!" }
+        - { name: NANO_BANK_API, value: http://bank-api:8081 }
+        - { name: MCP_PORT,      value: "8088" }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: finance-mcp
+  namespace: nano-bank
+spec:
+  selector: { app: finance-mcp }
+  ports: [ { port: 8088, targetPort: 8088 } ]
