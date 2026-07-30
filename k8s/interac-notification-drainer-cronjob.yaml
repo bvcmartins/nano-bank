@@ -1,0 +1,72 @@
+# Interac notification-outbox drainer (issue #26, option C).
+#
+# The `interac_notifications` outbox is written by the Interac lifecycle handlers
+# but has no in-process consumer (the API runs zero background workers by design).
+# This CronJob is the trigger: on each tick it mints a network/admin service token
+# and POSTs the admin-plane drainer `POST /api/v1/interac/admin/flush-notifications`,
+# which claims undelivered rows race-safely (FOR UPDATE SKIP LOCKED), hands each to
+# the delivery channel (currently a stub in handlers/interac.rs — the SMTP/SMS plug
+# point), and marks them delivered / dead-letters them past the retry cap.
+#
+# Trade-off: cron cadence == notification latency. For "your e-Transfer arrived"
+# UX this is laggy; if latency matters, promote to a dedicated worker Deployment
+# running the same drain loop (see issue #26). The claim itself is idempotent and
+# safe to overlap, but `concurrencyPolicy: Forbid` keeps ticks from piling up.
+#
+# NOTE: `client-secret` below must match the bank-api's
+# `security.service_client_secret`. In a real deployment BOTH bank-api and this
+# CronJob should source it from the SAME Secret (and the default must be rotated);
+# bank-api currently uses the built-in default, so this Secret carries that value.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: interac-drainer-secret
+  namespace: nano-bank
+type: Opaque
+stringData:
+  # Must equal bank-api's security.service_client_secret.
+  client-secret: "nano-bank-visa-network-secret-change-me"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: interac-notification-drainer
+  namespace: nano-bank
+spec:
+  schedule: "*/5 * * * *" # every 5 minutes; tighten for lower delivery latency
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # Give a tick a bounded lifetime so a wedged curl can't hold the slot.
+      activeDeadlineSeconds: 120
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: drainer
+              image: curlimages/curl:8.11.1
+              env:
+                - name: API_BASE
+                  value: "http://bank-api:8081"
+                - name: CLIENT_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: interac-drainer-secret
+                      key: client-secret
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  # 1) mint a short-lived service token
+                  token=$(curl -fsS -X POST "$API_BASE/api/v1/auth/service-token" \
+                    -H 'content-type: application/json' \
+                    -d "{\"client_secret\":\"$CLIENT_SECRET\"}" \
+                    | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+                  if [ -z "$token" ]; then echo "failed to obtain service token" >&2; exit 1; fi
+                  # 2) drain the outbox
+                  curl -fsS -X POST "$API_BASE/api/v1/interac/admin/flush-notifications" \
+                    -H "Authorization: Bearer $token"
+                  echo

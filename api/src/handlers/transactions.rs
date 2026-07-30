@@ -18,11 +18,11 @@
 //!
 //! ## General ledger of record
 //! Deposit and withdrawal post their aggregate effect to the swappable core via
-//! the `Ledger` port (deposit: debit `Bank` / credit `Payable`; withdrawal the
-//! reverse). A **transfer is not posted to the core**: both customer accounts
-//! map to the same `Payable` GL role, so the aggregate effect nets to zero — a
-//! transfer is an internal reclassification recorded only in the local
-//! subledger.
+//! the `Ledger` port (deposit: debit `Bank` / credit `CustomerDeposits`;
+//! withdrawal the reverse). A **transfer is not posted to the core**: both
+//! customer accounts map to the same `CustomerDeposits` GL role, so the aggregate
+//! effect nets to zero — a transfer is an internal reclassification recorded only
+//! in the local subledger.
 //!
 //! Only `chequing` / `savings` accounts are accepted here; `credit_card`
 //! accounts belong to the card rails.
@@ -139,7 +139,8 @@ async fn ensure_external_cash_account(pool: &DatabasePool) -> Result<Uuid, sqlx:
 // ---------------------------------------------------------------------------
 
 /// Deposit external cash into a customer account: customer credited (balance
-/// up), `EXTERNAL_CASH` debited. Posts debit `Bank` / credit `Payable` to the GL.
+/// up), `EXTERNAL_CASH` debited. Posts debit `Bank` / credit `CustomerDeposits`
+/// to the GL.
 async fn deposit_money(
     State(state): State<AppState>,
     auth: AuthenticatedCustomer,
@@ -178,7 +179,9 @@ async fn deposit_money(
     .await?;
 
     // customer *credit* (+balance); EXTERNAL_CASH *debit*. GL of record: bank
-    // cash up, customer-deposit liability up.
+    // cash up, customer-deposit liability up (the granular `CustomerDeposits`
+    // role, so deposit liability is one GL quantity across deposits, interest,
+    // and fees — not split with `Payable`).
     post_movement(
         &state,
         &mut tx,
@@ -189,7 +192,7 @@ async fn deposit_money(
         cash_id,
         Some(GlSpec {
             debit: GlAccount::Bank,
-            credit: GlAccount::Payable,
+            credit: GlAccount::CustomerDeposits,
             reference: &reference,
             description: &req.description,
         }),
@@ -209,7 +212,7 @@ async fn deposit_money(
 
 /// Withdraw cash from a customer account: customer debited (balance down),
 /// `EXTERNAL_CASH` credited. Enforces the daily withdrawal limit. Posts debit
-/// `Payable` / credit `Bank` to the GL.
+/// `CustomerDeposits` / credit `Bank` to the GL.
 async fn withdraw_money(
     State(state): State<AppState>,
     auth: AuthenticatedCustomer,
@@ -256,7 +259,7 @@ async fn withdraw_money(
     .await?;
 
     // customer *debit* (−balance); EXTERNAL_CASH *credit*. GL: customer-deposit
-    // liability down, bank cash down.
+    // liability down (`CustomerDeposits`), bank cash down.
     post_movement(
         &state,
         &mut tx,
@@ -266,7 +269,7 @@ async fn withdraw_money(
         amount,
         cash_id,
         Some(GlSpec {
-            debit: GlAccount::Payable,
+            debit: GlAccount::CustomerDeposits,
             credit: GlAccount::Bank,
             reference: &reference,
             description: &req.description,
@@ -468,7 +471,7 @@ pub(crate) async fn execute_transfer(
     .await?;
 
     // from *debit* (−balance); to *credit* (+balance). Local-only: both accounts
-    // map to the same `Payable` GL role, so the aggregate effect nets to zero.
+    // map to the same `CustomerDeposits` GL role, so the aggregate effect nets to zero.
     post_movement(
         &state,
         &mut tx,
@@ -482,10 +485,12 @@ pub(crate) async fn execute_transfer(
     .await?;
 
     // Transfer fee: a separate `fee` transaction, funding account → EXTERNAL_CASH,
-    // with the fee recognised as Revenue at the GL. The idempotent early-return
-    // above covers only *sequential* replays; with no unique index a tightly
-    // concurrent same-key duplicate could still post both the transfer and this
-    // fee (deferred idempotency hardening — backlog §8.D).
+    // with the fee recognised as `FeeIncome` at the GL (the same role the e-transfer
+    // and maintenance fees use — fee income is one GL quantity) and the customer
+    // leg on `CustomerDeposits`. The idempotent early-return above covers only
+    // *sequential* replays; with no unique index a tightly concurrent same-key
+    // duplicate could still post both the transfer and this fee (deferred
+    // idempotency hardening — backlog §8.D).
     if fee > Decimal::ZERO {
         let fee_ref = reference_number("FEE");
         let fee_txn = insert_transaction(
@@ -508,8 +513,8 @@ pub(crate) async fn execute_transfer(
             fee,
             cash_id,
             Some(GlSpec {
-                debit: GlAccount::Payable,
-                credit: GlAccount::Revenue,
+                debit: GlAccount::CustomerDeposits,
+                credit: GlAccount::FeeIncome,
                 reference: &fee_ref,
                 description: "transfer fee",
             }),
@@ -707,16 +712,18 @@ async fn reverse_transaction(
     .await?;
 
     // Reverse the GL by original type (a transfer posted none, so nothing to undo).
+    // Mirrors the deposit/withdrawal roles: the customer-deposit liability leg is
+    // `CustomerDeposits`.
     let gl = match otype.as_str() {
         "deposit" => Some(GlSpec {
-            debit: GlAccount::Payable,
+            debit: GlAccount::CustomerDeposits,
             credit: GlAccount::Bank,
             reference: &reference,
             description: &reason,
         }),
         "withdrawal" => Some(GlSpec {
             debit: GlAccount::Bank,
-            credit: GlAccount::Payable,
+            credit: GlAccount::CustomerDeposits,
             reference: &reference,
             description: &reason,
         }),

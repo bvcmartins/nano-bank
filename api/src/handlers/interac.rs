@@ -44,6 +44,7 @@ pub fn interac_routes() -> Router<AppState> {
         .route("/network/etransfers/:id/settle", post(network_settle))
         // admin plane (service token)
         .route("/admin/sweep-expired", post(sweep_expired))
+        .route("/admin/flush-notifications", post(flush_notifications))
 }
 
 /// Resolve Interac's clearing/settlement accounts (re-resolved per request) and
@@ -286,6 +287,115 @@ async fn notify(
     .execute(&mut **tx)
     .await?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Notification-outbox drainer (admin plane)
+// ---------------------------------------------------------------------------
+
+/// Attempts before a notification is dead-lettered: left undelivered with its
+/// `last_delivery_error`, and no longer picked up by the drainer.
+const MAX_DELIVERY_ATTEMPTS: i32 = 5;
+/// Rows claimed per flush — bounds one admin call's work.
+const FLUSH_BATCH: i64 = 100;
+
+/// A claimed outbox row, ready to hand to the delivery channel.
+#[derive(sqlx::FromRow)]
+struct ClaimedNotification {
+    notification_id: Uuid,
+    handle_value: String,
+    kind: String,
+    message: String,
+}
+
+/// The delivery-channel seam. Today it just logs — this is where a real email/SMS
+/// provider plugs in. Returns `Err(reason)` on a delivery failure so the drainer
+/// records it and retries (up to the attempt cap).
+///
+/// **Delivery is at-least-once.** The claim, the send, and the `delivered = TRUE`
+/// mark are three separate statements, so a crash (or a failed mark) after a
+/// successful send re-delivers on the next tick. That is invisible while this is a
+/// stub, but a real provider must dedupe: pass `notification_id` as the
+/// provider-side **idempotency key** so a retry collapses into the original send
+/// instead of a second "your e-Transfer arrived" message.
+async fn deliver_notification(n: &ClaimedNotification) -> Result<(), String> {
+    tracing::info!(
+        notification_id = %n.notification_id,
+        handle = %n.handle_value,
+        kind = %n.kind,
+        "📣 interac notification delivered (stub): {}",
+        n.message
+    );
+    Ok(())
+}
+
+/// Drain the Interac notification outbox (admin plane, service token).
+///
+/// The claim is an atomic `delivery_attempts += 1` under `FOR UPDATE SKIP LOCKED`,
+/// so concurrent drainers (or multiple API replicas) never grab the same row, and
+/// there is no in-flight "sending" state to strand on a crash: a claim that dies
+/// mid-send just costs one attempt and is retried next flush. Rows past
+/// `MAX_DELIVERY_ATTEMPTS` are skipped (dead-lettered, visible via
+/// `last_delivery_error`) instead of retried forever.
+async fn flush_notifications(
+    State(state): State<AppState>,
+    _svc: AuthenticatedService,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let claimed = sqlx::query_as::<_, ClaimedNotification>(
+        "UPDATE interac_notifications SET delivery_attempts = delivery_attempts + 1 \
+         WHERE notification_id IN ( \
+             SELECT notification_id FROM interac_notifications \
+             WHERE delivered = FALSE AND delivery_attempts < $1 \
+             ORDER BY created_at \
+             LIMIT $2 \
+             FOR UPDATE SKIP LOCKED \
+         ) \
+         RETURNING notification_id, handle_value, kind::text AS kind, message",
+    )
+    .bind(MAX_DELIVERY_ATTEMPTS)
+    .bind(FLUSH_BATCH)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let claimed_count = claimed.len() as i64;
+    let mut delivered = 0i64;
+    let mut failed = 0i64;
+
+    for n in claimed {
+        match deliver_notification(&n).await {
+            Ok(()) => {
+                sqlx::query(
+                    "UPDATE interac_notifications \
+                     SET delivered = TRUE, delivered_at = CURRENT_TIMESTAMP, \
+                         last_delivery_error = NULL \
+                     WHERE notification_id = $1",
+                )
+                .bind(n.notification_id)
+                .execute(&state.pool)
+                .await?;
+                delivered += 1;
+            }
+            Err(reason) => {
+                // Leave delivered = FALSE (the attempt is already counted): it
+                // retries next flush until the budget is spent, then dead-letters.
+                sqlx::query(
+                    "UPDATE interac_notifications SET last_delivery_error = $2 \
+                     WHERE notification_id = $1",
+                )
+                .bind(n.notification_id)
+                .bind(&reason)
+                .execute(&state.pool)
+                .await?;
+                failed += 1;
+            }
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "claimed": claimed_count,
+        "delivered": delivered,
+        "failed": failed,
+    })))
 }
 
 fn idempotency_conflict(e: sqlx::Error) -> AppError {

@@ -382,13 +382,16 @@ async fn capture(
 
     // The core is the general ledger of record: post the aggregate GL effect of
     // the purchase (cardholder receivable up, network clearing payable up). The
-    // per-card subledger above stays local. Done before commit so a core failure
-    // fails the capture rather than letting the GL drift.
+    // cardholder receivable uses the granular `CardReceivable` role — the same
+    // role card-interest capitalisation raises — so the card asset is one GL
+    // quantity, not split across `Receivable`/`CardReceivable`. The per-card
+    // subledger above stays local. Done before commit so a core failure fails
+    // the capture rather than letting the GL drift.
     let gl = post_gl_entry(
         &state,
         &reference,
         &format!("Card purchase — {}", merchant),
-        GlAccount::Receivable,
+        GlAccount::CardReceivable,
         GlAccount::Payable,
         amount,
     )

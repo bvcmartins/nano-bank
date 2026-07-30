@@ -516,12 +516,13 @@ async fn seed_deposit(c: &reqwest::Client, token: &str, amount: f64) -> Option<(
     Some((account, txn_id(resp).await))
 }
 
-/// The Revenue GL balance as the configured core reports it, black-box via the
+/// The Fee-income GL balance as the configured core reports it, black-box via the
 /// API's own (unauthenticated) `GET /api/v1/ledger/balances`. `None` means the
-/// endpoint failed or no revenue account exists yet — the caller skips its GL
-/// assertion in that case. The modern core names it `REVENUE`, the legacy core
-/// `0000800000`; match either.
-async fn revenue_gl_balance(c: &reqwest::Client) -> Option<f64> {
+/// endpoint failed or no fee-income account exists yet — the caller skips its GL
+/// assertion in that case. The modern core names it `FEE_INCOME`, the legacy core
+/// `0000800300`; match either. (The transfer fee posts `FeeIncome`, the same role
+/// the e-transfer and maintenance fees use — fee income is one GL quantity.)
+async fn fee_income_gl_balance(c: &reqwest::Client) -> Option<f64> {
     let resp = c
         .get(format!("{}/api/v1/ledger/balances", base_url()))
         .send()
@@ -533,7 +534,7 @@ async fn revenue_gl_balance(c: &reqwest::Client) -> Option<f64> {
     let rows: Value = resp.json().await.ok()?;
     rows.as_array()?.iter().find_map(|r| {
         let name = r["account"].as_str()?;
-        if name == "REVENUE" || name == "0000800000" {
+        if name == "FEE_INCOME" || name == "0000800300" {
             Some(as_num(&r["balance"]))
         } else {
             None
@@ -601,8 +602,8 @@ async fn transfer_charges_a_flat_fee() {
     };
     let b = create_account(&c, &token, "savings").await;
 
-    // Sample the Revenue GL before the transfer so we can assert the fee posted.
-    let revenue_before = revenue_gl_balance(&c).await;
+    // Sample the fee-income GL before the transfer so we can assert the fee posted.
+    let fee_income_before = fee_income_gl_balance(&c).await;
 
     let resp = post_json(
         &c,
@@ -630,21 +631,21 @@ async fn transfer_charges_a_flat_fee() {
         "history should include the fee txn: {types:?}"
     );
 
-    // GL effect: the fee is recognised as Revenue at the core. Assert the
+    // GL effect: the fee is recognised as `FeeIncome` at the core. Assert the
     // *magnitude* of the move (>= the $1.50 fee), which is agnostic to the core's
-    // sign convention — the modern core reports Revenue credit-normal (a fee
+    // sign convention — the modern core reports fee income credit-normal (a fee
     // makes it more negative), the legacy core may report it the other way.
-    // Revenue is only ever credited (by fees, never debited/reversed), so it
+    // Fee income is only ever credited (by fees, never debited/reversed), so it
     // moves one direction only and parallel fees can't cancel the delta.
-    match (revenue_before, revenue_gl_balance(&c).await) {
+    match (fee_income_before, fee_income_gl_balance(&c).await) {
         (before, Some(after)) => {
             let before = before.unwrap_or(0.0);
             assert!(
                 (after - before).abs() >= 1.50 - 1e-6,
-                "Revenue GL should move by at least the $1.50 fee: {before} -> {after}"
+                "Fee-income GL should move by at least the $1.50 fee: {before} -> {after}"
             );
         }
-        _ => println!("SKIP: /ledger/balances unavailable or no revenue account yet"),
+        _ => println!("SKIP: /ledger/balances unavailable or no fee-income account yet"),
     }
 
     // DB effect: the `transaction_fees` row (linked to the transfer) and the

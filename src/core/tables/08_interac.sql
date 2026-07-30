@@ -68,6 +68,12 @@ CREATE TABLE interac_notifications (
     message         TEXT NOT NULL,
     claim_token     VARCHAR(40),
     delivered       BOOLEAN NOT NULL DEFAULT FALSE,
+    -- Drainer bookkeeping (see handlers/interac.rs flush_notifications): the retry
+    -- counter caps a permanently-failing send (dead-letter, not an infinite loop),
+    -- last_delivery_error is for observability, delivered_at stamps success.
+    delivery_attempts   INTEGER NOT NULL DEFAULT 0,
+    last_delivery_error TEXT,
+    delivered_at        TIMESTAMP WITH TIME ZONE,
     created_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 CREATE INDEX idx_interac_notifications_undelivered

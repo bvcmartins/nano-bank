@@ -193,7 +193,7 @@ other core (a new entry id / `belnr`).
 (`available = overdraft_limit − balance − holds`).
 
 On top of that, `capture` and `settle` post the **aggregate GL effect** to the
-core via the port (capture: debit Receivable / credit Payable; settle: debit
+core via the port (capture: debit CardReceivable / credit Payable; settle: debit
 Payable / credit Bank), recording the core's document id in
 `transactions.metadata.gl_entry`. The GL post happens inside the capture/settle
 DB transaction, before commit — so if the core can't record it, the operation
@@ -204,8 +204,9 @@ local-only (a hold; no money moves).
 Deposit and withdrawal move value across an internal **`EXTERNAL_CASH`** account
 (a chequing account under a synthetic `cash@nano.bank` customer, $1T overdraft)
 and post the aggregate effect through the port (deposit: debit `Bank` / credit
-`Payable`; withdrawal the reverse). A **transfer is local-only** — both customer
-accounts map to the same `Payable` GL role, so the net GL effect is zero. All
+`CustomerDeposits`; withdrawal the reverse). A **transfer is local-only** — both
+customer accounts map to the same `CustomerDeposits` GL role, so the net GL effect
+is zero. All
 three enforce balance/status/type checks and the `account_limits` counters, and
 update `daily_transaction_summaries`; transfer honors an `idempotency_key`.
 
@@ -230,11 +231,21 @@ The first **external payment rail**, built on a small `Rail` port that sits
   autodeposit (registered handle) / claim (security Q&A, argon2, 3-strike lock) /
   decline / cancel / expire (sweep). Inbound: autodeposit fast-path
   (`accept_inbound`) or held-then-claim. Notifications go to the
-  `interac_notifications` **outbox** table (no real email/SMS).
-- **Three auth planes**: customer (`/etransfers`, `/autodeposit`), service-token
-  **network** (`/network/inbound`, `/network/etransfers/:id/settle` — driven by
-  `testing/interac/interac_simulator.py`), service-token **admin**
-  (`/admin/sweep-expired`). The viewer (`testing/viewer`) has an Interac tab.
+  `interac_notifications` **outbox** table (no real email/SMS); the admin-plane
+  **drainer** (`POST /admin/flush-notifications`) consumes it — claims undelivered
+  rows race-safely (`FOR UPDATE SKIP LOCKED`, an atomic `delivery_attempts += 1`
+  claim so a crashed send just retries next tick), hands each to a delivery seam
+  (stubbed — the SMTP/SMS plug point), and dead-letters a row past its retry cap.
+  Triggered by a k8s CronJob (`k8s/interac-notification-drainer-cronjob.yaml`).
+- **Auth planes**: the *enforced* boundary is customer (`/etransfers`,
+  `/autodeposit`) vs service token — `AuthenticatedService` checks only
+  `role == Service`. Within the service token, **network** (`/network/inbound`,
+  `/network/etransfers/:id/settle` — driven by
+  `testing/interac/interac_simulator.py`) and **admin**
+  (`/admin/sweep-expired`, `/admin/flush-notifications`) are a routing/naming
+  convention, not separate credentials: the same secret opens both. Splitting
+  them would need a distinct admin credential. The viewer (`testing/viewer`) has
+  an Interac tab.
 - **`available_balance` note**: the balance trigger maintains only `balance`, so
   the handlers hand-recompute `available_balance` around rail posts on **customer**
   accounts; the system clearing/settlement accounts intentionally keep it at 0

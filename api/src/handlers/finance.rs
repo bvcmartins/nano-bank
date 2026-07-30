@@ -52,6 +52,19 @@ fn line(account: Gl, direction: Direction, amount: Decimal) -> EntryLine {
     EntryLine { account, direction, amount }
 }
 
+/// The single "is this a **real customer** account?" predicate, shared by every
+/// finance query that must skip the bank's own synthetic accounts. Those are the
+/// `@nano.bank` system customers (`cash`, `system`, `interac`, `aft`, `lynx`) that
+/// own the clearing/settlement floats; a real customer never has a `@nano.bank`
+/// email. Assumes the query joins `accounts a` to `customers c`.
+///
+/// This replaces the two implicit heuristics the accrual and fee queries used to
+/// lean on (`interest_rate > 0` for accrual, `overdraft_limit < 1000000` for the
+/// maintenance fee) — a real customer with a large overdraft is no longer
+/// silently exempt, and a system account with a stray nonzero rate is no longer
+/// accrued.
+const CUSTOMER_ACCOUNT: &str = "c.email NOT LIKE '%@nano.bank'";
+
 /// Drop a customer account's `available_balance` to 0 before posting a leg that
 /// lowers `balance`, so `chk_available_balance_logical` (available <= balance +
 /// overdraft) can't trip mid-statement. Recompute the true value afterwards.
@@ -197,12 +210,14 @@ async fn accrue(
     let mut tx = state.pool.begin().await?;
 
     // Deposit side: liability balances earn interest (an expense to the bank).
-    // System/settlement accounts carry interest_rate = 0, so they are excluded.
-    let deposits = sqlx::query_as::<_, (Uuid, Decimal, Decimal)>(
-        "SELECT account_id, balance, interest_rate FROM accounts \
-         WHERE status = 'active' AND balance > 0 AND interest_rate > 0 \
-           AND account_type IN ('chequing','savings')",
-    )
+    // `CUSTOMER_ACCOUNT` excludes the bank's own system accounts; `interest_rate
+    // > 0` / `balance > 0` are now just "would accrue nonzero" filters.
+    let deposits = sqlx::query_as::<_, (Uuid, Decimal, Decimal)>(&format!(
+        "SELECT a.account_id, a.balance, a.interest_rate FROM accounts a \
+         JOIN customers c ON c.customer_id = a.customer_id \
+         WHERE a.status = 'active' AND a.balance > 0 AND a.interest_rate > 0 \
+           AND a.account_type IN ('chequing','savings') AND {CUSTOMER_ACCOUNT}"
+    ))
     .fetch_all(&mut *tx)
     .await?;
 
@@ -224,11 +239,12 @@ async fn accrue(
     }
 
     // Asset side: credit-card balances the customer owes accrue interest income.
-    let cards = sqlx::query_as::<_, (Uuid, Decimal, Decimal)>(
-        "SELECT account_id, balance, interest_rate FROM accounts \
-         WHERE status = 'active' AND balance > 0 AND interest_rate > 0 \
-           AND account_type = 'credit_card'",
-    )
+    let cards = sqlx::query_as::<_, (Uuid, Decimal, Decimal)>(&format!(
+        "SELECT a.account_id, a.balance, a.interest_rate FROM accounts a \
+         JOIN customers c ON c.customer_id = a.customer_id \
+         WHERE a.status = 'active' AND a.balance > 0 AND a.interest_rate > 0 \
+           AND a.account_type = 'credit_card' AND {CUSTOMER_ACCOUNT}"
+    ))
     .fetch_all(&mut *tx)
     .await?;
 
@@ -414,13 +430,16 @@ async fn capitalise(
     .bind(start).bind(end)
     .execute(&mut *tx).await?;
 
-    // Monthly maintenance fee on real customer deposit accounts (the $1T-overdraft
-    // system accounts are excluded by the overdraft_limit filter).
-    let fee_rows = sqlx::query_as::<_, (Uuid, Uuid, Decimal, Decimal)>(
-        "SELECT account_id, customer_id, balance, overdraft_limit FROM accounts \
-         WHERE status = 'active' AND account_type IN ('chequing','savings') \
-           AND overdraft_limit < 1000000",
-    )
+    // Monthly maintenance fee on real customer deposit accounts. `CUSTOMER_ACCOUNT`
+    // excludes the bank's own system accounts — so a real customer with a large
+    // overdraft is no longer silently exempt (as the old `overdraft_limit` filter
+    // would have made them).
+    let fee_rows = sqlx::query_as::<_, (Uuid, Uuid, Decimal, Decimal)>(&format!(
+        "SELECT a.account_id, a.customer_id, a.balance, a.overdraft_limit FROM accounts a \
+         JOIN customers c ON c.customer_id = a.customer_id \
+         WHERE a.status = 'active' AND a.account_type IN ('chequing','savings') \
+           AND {CUSTOMER_ACCOUNT}"
+    ))
     .fetch_all(&mut *tx)
     .await?;
 
