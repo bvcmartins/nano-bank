@@ -97,3 +97,44 @@ def test_segment_pnl_reconciles_with_interchange():
     assert out["total_income"] == D("45")
     assert out["total_expense"] == D("6")
     assert out["segments"][("card", "payments")]["income"] == D("12")
+
+
+def test_segment_pnl_declares_where_its_numbers_come_from():
+    """Segment figures are read from nano-bank's operational tables while the
+    income statement is read from the GL snapshot — two different databases,
+    cleared on different schedules. A caller that doesn't know that will quote
+    segment net income as P&L."""
+    out = reports.segment_pnl([], [], interchange_total=D("0"))
+    src = out["source"].lower()
+    assert "operational" in src and "not the gl" in src
+    assert "interchange" in src          # the one line that IS GL-derived
+
+
+def test_segment_pnl_reconciles_against_the_income_statement():
+    accruals = [{"product": "card", "cost_centre": "lending",
+                 "side": "income", "amount": D("30")}]
+    out = reports.segment_pnl(accruals, [], interchange_total=D("0"),
+                              gl_net_income=D("30"))
+    assert out["reconciliation"]["reconciled"] is True
+    assert out["reconciliation"]["difference"] == D("0")
+
+
+def test_segment_pnl_flags_an_unreconciled_gap():
+    """The demo's GL is reset each run but the operational tables are not, so
+    stale fees inflate the segments. The gap has to be stated, not left for the
+    reader to notice."""
+    accruals = [{"product": "card", "cost_centre": "lending",
+                 "side": "income", "amount": D("11988")}]
+    out = reports.segment_pnl(accruals, [], interchange_total=D("0"),
+                              gl_net_income=D("1448"))
+    rec = out["reconciliation"]
+    assert rec["reconciled"] is False
+    assert rec["segment_net_income"] == D("11988")
+    assert rec["gl_net_income"] == D("1448")
+    assert rec["difference"] == D("10540")
+    assert "do not" in rec["note"].lower()
+
+
+def test_segment_pnl_without_a_gl_figure_says_it_is_unreconciled():
+    out = reports.segment_pnl([], [], interchange_total=D("0"))
+    assert out["reconciliation"]["reconciled"] is None

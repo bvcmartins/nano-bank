@@ -1,0 +1,23 @@
+import pytest
+from cfo.config import Settings
+from cfo import model_factory as mf
+
+
+def _settings():
+    return Settings.from_env({"OLLAMA_API_KEY": "x"})
+
+
+def test_resolver_picks_model_when_it_probes():
+    s = _settings()
+    assert mf.resolve_model(s, probe=lambda model, st: model == "glm-5.2") == "glm-5.2"
+
+
+def test_resolver_raises_when_probe_fails():
+    with pytest.raises(RuntimeError):
+        mf.resolve_model(_settings(), probe=lambda model, st: False)
+
+
+def test_llm_requires_init(monkeypatch):
+    monkeypatch.setattr(mf, "_RESOLVED", None, raising=False)
+    with pytest.raises(RuntimeError):
+        mf.llm()

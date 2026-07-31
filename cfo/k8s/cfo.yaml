@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cfo
+  namespace: nano-bank
+  labels: { app: cfo }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: cfo } }
+  template:
+    metadata: { labels: { app: cfo } }
+    spec:
+      containers:
+      - name: cfo
+        image: nano-cfo:dev
+        imagePullPolicy: Never
+        ports: [ { containerPort: 8089 } ]
+        envFrom:
+        - secretRef: { name: nano-agent-secrets }   # provides OLLAMA_API_KEY
+        env:
+        - { name: FINANCE_MCP_URL, value: http://finance-mcp:8088/mcp }
+        - { name: OLLAMA_BASE_URL, value: https://ollama.com/v1 }
+        - { name: CFO_MODEL,       value: glm-5.2 }
+        - { name: API_PORT,        value: "8089" }
+        readinessProbe:
+          httpGet: { path: /health, port: 8089 }
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet: { path: /health, port: 8089 }
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        resources:
+          requests: { cpu: 50m,  memory: 128Mi }
+          limits:   { cpu: 500m, memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cfo
+  namespace: nano-bank
+spec:
+  selector: { app: cfo }
+  ports: [ { port: 8089, targetPort: 8089 } ]

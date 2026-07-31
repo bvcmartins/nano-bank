@@ -4,6 +4,7 @@ the debit-credit convention (assets/expenses +, liabilities/equity/income -).
 """
 from __future__ import annotations
 from decimal import Decimal
+from typing import Optional
 from . import roles
 
 
@@ -81,7 +82,29 @@ def nim(closing: dict, opening: dict, days: int) -> dict:
             "nim": margin, "provisional": provisional, "reason": reason}
 
 
-def segment_pnl(accruals: list, fees: list, interchange_total: Decimal) -> dict:
+_SEGMENT_SOURCE = (
+    "segment figures are read from nano-bank's operational tables "
+    "(interest_accruals, transactions), NOT the GL trial balance — interchange "
+    "is the one line that is GL-derived. The two populations differ and are "
+    "cleared on different schedules, so segment totals need not tie to "
+    "income_statement; see `reconciliation`")
+
+_UNRECONCILED = (
+    "segment net income does NOT tie to the GL income statement. The segments "
+    "carry activity the GL has not booked (or vice versa) — do not present "
+    "these figures as the bank's P&L, and do not rank segments on value "
+    "creation, until the difference is explained")
+
+
+def segment_pnl(accruals: list, fees: list, interchange_total: Decimal,
+                gl_net_income: Optional[Decimal] = None) -> dict:
+    """P&L by product and cost-centre.
+
+    Takes `gl_net_income` so the report can reconcile itself against the GL
+    income statement. It is optional only so the pure math stays callable
+    without a snapshot; when it is absent the result says so rather than
+    implying the segments tie.
+    """
     segments: dict[tuple, dict] = {}
 
     def bucket(product, cost_centre):
@@ -98,5 +121,18 @@ def segment_pnl(accruals: list, fees: list, interchange_total: Decimal) -> dict:
 
     ti = sum((s["income"] for s in segments.values()), Decimal(0))
     te = sum((s["expense"] for s in segments.values()), Decimal(0))
+    ni = ti - te
+
+    rec: dict = {"segment_net_income": ni, "gl_net_income": gl_net_income,
+                 "difference": None, "reconciled": None,
+                 "note": ("no GL net income supplied — these segments are "
+                          "unreconciled against the income statement")}
+    if gl_net_income is not None:
+        diff = ni - gl_net_income
+        rec["difference"] = diff
+        rec["reconciled"] = diff == 0
+        rec["note"] = ("segment net income ties to the GL income statement"
+                       if not diff else _UNRECONCILED)
+
     return {"segments": segments, "total_income": ti, "total_expense": te,
-            "net_income": ti - te}
+            "net_income": ni, "source": _SEGMENT_SOURCE, "reconciliation": rec}

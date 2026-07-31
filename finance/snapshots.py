@@ -12,10 +12,17 @@ def close_period(period: str, balances_rows: list, db) -> dict:
     (debit - credit) balances, negate credit-normal roles here before storing.
     """
     snapshot: dict[str, Decimal] = {}
+    skipped: list[str] = []
     for row in balances_rows:
         role = roles.role_for_code(row["account"])
         if role is None:
+            # A GL code the role map doesn't recognise is dropped from the
+            # snapshot — but naming it, rather than silently swallowing it, is the
+            # same principle as economic_capital's unclassified_roles: a code we
+            # can't map may be a balance a report is quietly missing.
+            skipped.append(row["account"])
             continue
         snapshot[role] = Decimal(str(row["balance"]))
     db.write_snapshot(period, snapshot)
-    return {"period": period, "roles_captured": len(snapshot)}
+    return {"period": period, "roles_captured": len(snapshot),
+            "skipped_codes": sorted(skipped)}

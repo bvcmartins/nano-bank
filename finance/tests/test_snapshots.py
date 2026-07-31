@@ -22,3 +22,6 @@ def test_close_period_maps_codes_to_roles():
     assert period == "2026-07"
     assert balances == {"CashReserves": D("1000.00"), "CustomerDeposits": D("-1000.00")}
     assert out["roles_captured"] == 2
+    # a code the role map doesn't recognise is dropped, but named rather than
+    # silently swallowed
+    assert out["skipped_codes"] == ["MYSTERY"]
