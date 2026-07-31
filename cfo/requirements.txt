@@ -1,4 +1,4 @@
-mcp>=1.2
+mcp>=1.2,<2  # 2.0 relocated mcp.server.fastmcp, breaking finance/mcp_server.py's import
 langgraph>=0.2
 langchain-core>=0.3
 langchain-openai>=0.2
