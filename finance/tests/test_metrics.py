@@ -240,3 +240,48 @@ def test_provision_scenario_can_turn_returns_negative():
                                      provision=D("400"))
     assert out["net_income_after"] == D("-300")
     assert out["roa_after"] < 0
+
+
+def test_expected_loss_covers_a_credit_role_without_a_configured_rate():
+    """A credit-exposed role with no configured loss rate must NOT contribute
+    zero to both loss and exposure (the ratio would still look plausible). It is
+    driven off the book, charged at the default rate, and named — the same fix
+    economic_capital got for risk weights."""
+    # Receivable is credit-exposed (roles.CREDIT_EXPOSED_ROLES) but not in the
+    # default loss table.
+    snap = {"Receivable": D("1000")}
+    assert metrics.expected_loss(snap, RC) == D("1000") * RC.default_loss_rate
+    assert metrics.credit_exposure(snap, RC) == D("1000")
+    out = metrics.raroc(snap, {}, days=30, risk=RC)
+    assert out["assumed_loss_roles"] == ["Receivable"]
+    # exposure moved with loss, so the rate is the default, not a plausible-looking
+    # understatement
+    assert out["expected_loss_rate"] == RC.default_loss_rate
+
+
+def test_raroc_surfaces_unclassified_roles_instead_of_dropping_them():
+    """economic_capital computes unclassified_roles; raroc used to drop it and
+    financial_health (which bundles raroc) never saw it. Propagate it."""
+    out = metrics.raroc({"MysteryLedger": D("5000")}, {}, days=30, risk=RC)
+    assert out["unclassified_roles"] == ["MysteryLedger"]
+    fh = metrics.financial_health({"MysteryLedger": D("5000")}, {}, days=30, risk=RC)
+    assert fh["raroc"]["unclassified_roles"] == ["MysteryLedger"]
+
+
+def test_key_ratios_labels_periodicity_and_capital_basis():
+    """key_ratios is the most-quoted tool and carried no units at all — the same
+    unlabelled-periodicity trap raroc fixed. It also mixes two capital
+    definitions (roe on capital_base, leverage on total_equity) and must say so."""
+    r = metrics.key_ratios({"CashReserves": D("100"), "Capital": D("-100")},
+                           {}, days=30, risk=RC)
+    assert r["units"]["roe"] == "annual ratio"
+    assert "capital_base" in r["basis"] and "total_equity" in r["basis"]
+
+
+def test_efficiency_ratio_is_undefined_when_revenue_is_not_positive():
+    """A loss-making period has negative revenue; opex / negative-revenue is a
+    negative 'efficiency' that reads as an ordinary good ratio. Undefined instead."""
+    closing = {"InterestExpense": D("500"), "OperatingExpense": D("100")}
+    r = metrics.key_ratios(closing, {}, days=30, risk=RC)
+    # total_revenue = -500 (net interest) < 0
+    assert r["efficiency_ratio"] is None

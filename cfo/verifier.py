@@ -5,6 +5,8 @@ returned this turn. The trace of tool outputs is the oracle; there is no LLM
 here. See docs/superpowers/specs/2026-07-22-cfo-answer-verifier-design.md.
 """
 from __future__ import annotations
+import ast
+import json
 import re
 from decimal import Decimal, InvalidOperation
 
@@ -22,8 +24,75 @@ def _to_decimal(raw: str) -> "Decimal | None":
         return None
 
 
+def _bare_number(s: str) -> "Decimal | None":
+    """A string that is *only* a number (Decimals serialise as strings), else
+    None — so '0.151' grounds but '2026-07' or 'CAD, annual' does not."""
+    s2 = s.strip().replace("−", "-")
+    return _to_decimal(s2) if _NUM.fullmatch(s2) else None
+
+
+# Keys whose values are NOT figures a CFO answer should ground against: prose
+# (units/basis/note/source), the risk-weight assumption table, list-of-roles
+# diagnostics, and bookkeeping scalars. Flattening these into the grounded pool
+# was the #3 defect — it let "our NPL ratio is 3%" ground against a 0.03 loss
+# weight, and units/basis prose integers (365, 31) ground arbitrary figures.
+# Nested notes are dropped at their own level too, since the check is per-dict.
+_NOISE_KEYS = frozenset({
+    "units", "basis", "note", "source",
+    "risk_weights", "assumed_weight_roles", "assumed_loss_roles",
+    "unclassified_roles", "opening_snapshot_missing",
+    "error", "period", "available", "period_days",
+})
+
+
+def _parse(raw):
+    """Best-effort parse of a tool output into a Python structure: JSON first,
+    then a Python literal (the trace stores str(dict) with single quotes)."""
+    if isinstance(raw, (dict, list)):
+        return raw
+    if not isinstance(raw, str):
+        return None
+    for loader in (json.loads, ast.literal_eval):
+        try:
+            return loader(raw)
+        except (ValueError, SyntaxError):
+            continue
+    return None
+
+
+def _harvest(node, out: list) -> None:
+    """Collect numbers from VALUE positions of a parsed tool output, skipping
+    noise keys at every level. Strings that are themselves nested structures
+    (e.g. an MCP text block wrapping the real JSON) are recursed into."""
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k in _NOISE_KEYS:
+                continue
+            _harvest(v, out)
+    elif isinstance(node, (list, tuple)):
+        for v in node:
+            _harvest(v, out)
+    elif isinstance(node, bool):
+        return  # bool is an int subclass — never a figure
+    elif isinstance(node, (int, float)):
+        d = _to_decimal(str(node))
+        if d is not None:
+            out.append(d)
+    elif isinstance(node, str):
+        d = _bare_number(node)
+        if d is not None:
+            out.append(d)
+            return
+        nested = _parse(node)
+        if isinstance(nested, (dict, list)):
+            _harvest(nested, out)
+
+
 def grounded_values(trace: list[dict]) -> list[Decimal]:
-    """Every numeric literal appearing in any tool output in the trace."""
+    """Every figure a tool actually *returned* this turn — harvested from value
+    positions of the parsed output, not every literal in its text. Falls back to
+    a raw text scan for an output that won't parse, so it never under-grounds and
+    raises false 'ungrounded' flags."""
     out: list[Decimal] = []
     for ev in trace:
         if ev.get("kind") != "tool":
@@ -31,11 +100,15 @@ def grounded_values(trace: list[dict]) -> list[Decimal]:
         raw = ev.get("output")
         if not raw:
             continue
-        text = raw if isinstance(raw, str) else str(raw)
-        for m in _NUM.findall(text.replace("−", "-")):
-            d = _to_decimal(m)
-            if d is not None:
-                out.append(d)
+        parsed = _parse(raw)
+        if parsed is not None:
+            _harvest(parsed, out)
+        else:
+            text = raw if isinstance(raw, str) else str(raw)
+            for m in _NUM.findall(text.replace("−", "-")):
+                d = _to_decimal(m)
+                if d is not None:
+                    out.append(d)
     return out
 
 

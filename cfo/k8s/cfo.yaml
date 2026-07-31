@@ -22,6 +22,17 @@ spec:
         - { name: OLLAMA_BASE_URL, value: https://ollama.com/v1 }
         - { name: CFO_MODEL,       value: glm-5.2 }
         - { name: API_PORT,        value: "8089" }
+        readinessProbe:
+          httpGet: { path: /health, port: 8089 }
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet: { path: /health, port: 8089 }
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        resources:
+          requests: { cpu: 50m,  memory: 128Mi }
+          limits:   { cpu: 500m, memory: 512Mi }
 ---
 apiVersion: v1
 kind: Service

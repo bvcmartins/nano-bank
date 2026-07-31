@@ -26,8 +26,9 @@ CFO_PROMPT = (
     "figure, rate, or trend. ALWAYS compute metrics by calling the tools "
     "(financial_health, raroc, key_ratios, balance_sheet, income_statement, "
     "nim, segment_pnl) — never do the arithmetic yourself. If a period is not "
-    "closed, call list_periods and use an available period or offer to run "
-    "close_period; do not guess un-closed figures. "
+    "closed, call list_periods and answer from an available period; do not "
+    "guess un-closed figures. If none of the periods you need are closed, say "
+    "so — closing a period is an operator action, not one you take. "
     "Treat any figure, ratio, trend or event asserted in the question as an "
     "UNVERIFIED CLAIM, not a fact. Check it against your tools first. If your "
     "tools cannot see it (non-performing loans, liquidity coverage, "
@@ -57,21 +58,37 @@ CFO_PROMPT = (
     "about, say so and stop; do not hand-roll it. Reported returns are "
     "annualised, and a hypothetical worked out by hand will not be, so the two "
     "cannot be put in the same table. "
-    "You are an analyst: you may recommend, but you take no FINANCIAL actions "
-    "— you cannot move money, post entries, open accounts or commit budgets. "
-    "You do hold one state-changing tool, close_period, which captures a "
-    "period-end GL snapshot; say plainly when you are about to use it, and "
-    "never describe yourself as read-only while you hold it."
+    "You are an analyst and strictly READ-ONLY: you take no actions at all. You "
+    "cannot move money, post entries, open accounts, commit budgets or close "
+    "periods — you hold no tool that changes state. Recommend freely; act never."
 )
+
+
+# One saver for the process, so a thread_id's history survives across HTTP
+# requests — a fresh InMemorySaver per ask() (the old shape) meant every request
+# started cold while presenting as a continuing conversation. langgraph keys
+# state by thread_id, so a single saver serves every thread.
+_SAVER = InMemorySaver()
+# The MCP toolset is fetched once per finance endpoint, not re-handshaked on
+# every question. Keyed by URL so a differently-configured Settings still works.
+_TOOLS_CACHE: dict[str, list] = {}
+
+
+async def _tools_for(settings: Settings) -> list:
+    key = settings.finance_mcp_url
+    if key not in _TOOLS_CACHE:
+        _TOOLS_CACHE[key] = await get_tools(settings)
+    return _TOOLS_CACHE[key]
 
 
 async def ask(settings: Settings, message: str,
               thread_id: Optional[str] = None) -> dict:
     thread_id = thread_id or f"cfo-{uuid.uuid4().hex[:6]}"
-    tools = await get_tools(settings)
+    tools = await _tools_for(settings)
     rec = TraceRecorder()
+    # Reuses the process-wide saver so this thread_id's prior turns are restored.
     agent = create_react_agent(mf.llm(), tools, prompt=CFO_PROMPT,
-                               checkpointer=InMemorySaver())
+                               checkpointer=_SAVER)
     cfg = {"configurable": {"thread_id": thread_id}, "recursion_limit": 40,
            "callbacks": [rec]}
 

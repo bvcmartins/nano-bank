@@ -59,6 +59,11 @@ _OFFER = re.compile(
 # Metrics no tool provides, grouped by concept: id -> (labels, shown name).
 # Grouping lets a disclaimer on any label (e.g. "non-performing loan") cover
 # every spelling ("NPL", "NPL ratio") and report the concept once.
+#
+# This is a SAMPLE of the phantom metrics, not the full boundary: the prompt
+# also tells the agent it cannot see concentration or maturities, which are not
+# checked here. Anything genuinely un-seeable that the agent asserts affirmatively
+# and this list misses will simply pass the claim channel — add it here to catch it.
 _PHANTOM_CONCEPTS = {
     "lcr": (["liquidity coverage ratio", "lcr"], "LCR"),
     "nsfr": (["net stable funding ratio", "nsfr"], "NSFR"),
@@ -68,7 +73,8 @@ _PHANTOM_CONCEPTS = {
 
 
 def _concept_present(low: str, labels: list[str]) -> bool:
-    return any(re.search(rf"\b{re.escape(lab)}\b", low) for lab in labels)
+    # `s?` so a plural spelling ("NPLs", "ratios") still matches the label.
+    return any(re.search(rf"\b{re.escape(lab)}s?\b", low) for lab in labels)
 
 
 def unsupported_claims(answer: str, trace: list[dict]) -> list[str]:

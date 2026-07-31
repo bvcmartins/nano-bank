@@ -55,18 +55,45 @@ def economic_capital(snapshot: dict, risk: RiskConfig) -> dict:
             "economic_capital": (total * risk.target_ratio).quantize(Decimal("0.01"))}
 
 
+def _credit_book(snapshot: dict, risk: RiskConfig) -> dict:
+    """Per-role credit exposure and expected loss, driven off the balance sheet.
+
+    Same defect class as the original economic_capital bug: iterating the
+    loss-rate table instead of the book made a credit-exposed role with no
+    configured rate contribute zero to *both* expected loss and exposure — and
+    because expected_loss_rate divides one by the other, the ratio stayed
+    plausible. Here the credit-exposed roles come from `roles.CREDIT_EXPOSED_ROLES`
+    (the book), and a role present but unconfigured falls back to
+    `default_loss_rate` and is named in `assumed` rather than vanishing.
+    """
+    exposure: dict[str, Decimal] = {}
+    loss: dict[str, Decimal] = {}
+    assumed: list[str] = []
+    for role in roles.CREDIT_EXPOSED_ROLES:
+        bal = snapshot.get(role, Decimal(0))
+        # Include a role if it carries a balance, or if it is configured (so a
+        # configured-but-absent role still reads as a deliberate 0, matching the
+        # old behaviour); skip an unconfigured role with no balance so we never
+        # invent exposure that isn't on the book.
+        if bal == 0 and role not in risk.loss_rates:
+            continue
+        rate = risk.loss_rates.get(role)
+        if rate is None:
+            rate = risk.default_loss_rate
+            assumed.append(role)
+        exposure[role] = bal
+        loss[role] = bal * rate
+    return {"exposure": exposure, "loss": loss, "assumed": sorted(assumed)}
+
+
 def expected_loss(snapshot: dict, risk: RiskConfig) -> Decimal:
-    total = Decimal(0)
-    for role, rate in risk.loss_rates.items():
-        total += snapshot.get(role, Decimal(0)) * rate
-    return total
+    return sum(_credit_book(snapshot, risk)["loss"].values(), Decimal(0))
 
 
 def credit_exposure(snapshot: dict, risk: RiskConfig) -> Decimal:
     """The balances expected loss is charged against — the denominator behind
     any 'expected loss is x% of the book' statement."""
-    return sum((snapshot.get(role, Decimal(0)) for role in risk.loss_rates),
-               Decimal(0))
+    return sum(_credit_book(snapshot, risk)["exposure"].values(), Decimal(0))
 
 
 def raroc(closing: dict, opening: dict, days: int, risk: RiskConfig) -> dict:
@@ -74,8 +101,9 @@ def raroc(closing: dict, opening: dict, days: int, risk: RiskConfig) -> dict:
     ni = inc["net_income"]
     # Annualise multiply-first (x * 365 / days) so exact figures stay exact.
     ni_ann = ni * Decimal(365) / Decimal(days)
-    el = expected_loss(closing, risk)
-    exposure = credit_exposure(closing, risk)
+    cb = _credit_book(closing, risk)
+    el = sum(cb["loss"].values(), Decimal(0))
+    exposure = sum(cb["exposure"].values(), Decimal(0))
     ec = economic_capital(closing, risk)
     rar = ni_ann - el
     return {
@@ -95,6 +123,14 @@ def raroc(closing: dict, opening: dict, days: int, risk: RiskConfig) -> dict:
         "rwa": ec["rwa"],
         "risk_weights": ec["risk_weights"],
         "assumed_weight_roles": ec["assumed_weight_roles"],
+        # A credit-exposed role charged at the default loss rate rather than a
+        # configured one — an assumption, not policy, same as assumed_weight_roles.
+        "assumed_loss_roles": cb["assumed"],
+        # A role economic_capital dropped from RWA because STATEMENT_LINE doesn't
+        # classify it — a nonzero one may be an asset the capital charge is
+        # missing. Propagated so financial_health surfaces it too; without this
+        # the warning was computed and then discarded.
+        "unclassified_roles": ec["unclassified_roles"],
         "period_days": days,
         # Periodicity travels with the figures: mixing an annual number into a
         # monthly comparison is the easiest way to misread this whole bundle.
@@ -156,13 +192,38 @@ def key_ratios(closing: dict, opening: dict, days: int, risk: RiskConfig) -> dic
     return {
         "roa": _safe_div(ni_ann, total_assets),
         "roe": _safe_div(ni_ann, capital_base),
-        "efficiency_ratio": _safe_div(opex, total_revenue),
+        # Guard a negative denominator, not just zero: a loss-making period has
+        # negative total_revenue, and opex / negative-revenue is a negative
+        # "efficiency" that reads as an ordinary (good) ratio. Undefined is honest.
+        "efficiency_ratio": (_safe_div(opex, total_revenue)
+                             if total_revenue > 0 else None),
         "loan_to_deposit": _safe_div(loans, deposits_close),
         "leverage_ratio": _safe_div(total_equity, total_assets),
         "rwa_capital_ratio": _safe_div(total_equity, ec["total_rwa"]),
         "cost_of_funds": _safe_div(ann(ie), avg_deposits),
         "yield_on_earning_assets": _safe_div(ann(ii),
                                              nim_out["avg_earning_assets"]),
+        # All ratios are annualised (returns/costs scaled to a year, stocks
+        # point-in-time). Without this the most-quoted tool in the set carried no
+        # periodicity label at all — the same unlabelled-periodicity trap raroc
+        # fixed with its own units map.
+        "units": {
+            "roa": "annual ratio", "roe": "annual ratio",
+            "efficiency_ratio": "ratio, period (opex / period revenue)",
+            "loan_to_deposit": "ratio, point-in-time",
+            "leverage_ratio": "ratio, point-in-time",
+            "rwa_capital_ratio": "ratio, point-in-time",
+            "cost_of_funds": "annual ratio", "yield_on_earning_assets": "annual ratio",
+        },
+        # ROE and the two capital-adequacy ratios divide by DIFFERENT capital
+        # definitions on purpose; state it so an agent reporting them together
+        # doesn't read one number against two silently-different denominators.
+        "basis": ("roe divides by capital_base — equity EXCLUDING current "
+                  "earnings, so a period's own profit doesn't flatter its return "
+                  "on capital; leverage_ratio and rwa_capital_ratio divide by "
+                  "total_equity, which INCLUDES current earnings, per the "
+                  "regulatory capital convention. Do not compare roe against the "
+                  "capital ratios as if they shared a denominator"),
     }
 
 

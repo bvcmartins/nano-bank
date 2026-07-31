@@ -45,7 +45,10 @@ if prompt := st.chat_input("Ask the CFO about the bank's finances…"):
         st.markdown(answer)
         if veri is not None:
             line = badge(veri)
-            if veri.get("ungrounded"):
+            # badge() counts ungrounded figures AND unsupported claims, so escalate
+            # on either — an answer flagged only for a phantom-metric claim was
+            # rendering as a quiet caption while the badge said "⚠".
+            if veri.get("ungrounded") or veri.get("unsupported_claims"):
                 st.warning(line)
             else:
                 st.caption(line)

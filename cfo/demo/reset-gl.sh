@@ -9,7 +9,8 @@
 # Stale transactions.metadata.gl_entry ids are left dangling; nothing in the
 # reporting path reads them.
 #
-#   bash cfo/demo/reset-gl.sh
+#   bash cfo/demo/reset-gl.sh            # prompts before truncating
+#   bash cfo/demo/reset-gl.sh --yes      # non-interactive (or RESET_YES=1)
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
@@ -17,6 +18,17 @@ CORE_CTX="${CORE_KUBE_CONTEXT:-kind-modern-core}"
 CORE_NS="${CORE_NAMESPACE:-modern-core}"
 CORE_DB_DEPLOY="${CORE_DB_DEPLOY:-deploy/modern-core-db}"
 CORE_SEED="${CORE_SEED:-$HOME/dev/nano-bank-modern-core/resources/seed.sql}"
+
+# This TRUNCATEs the core journal and clears gl_snapshots, and the target is
+# chosen entirely from env-var defaults — a wrong CORE_KUBE_CONTEXT points the
+# destructive statements at the wrong cluster. Confirm before firing unless
+# explicitly waived, so it can still run unattended in the demo script.
+ASSUME_YES="${RESET_YES:-0}"
+[ "${1:-}" = "--yes" ] && ASSUME_YES=1
+if [ "$ASSUME_YES" != 1 ]; then
+  read -r -p "TRUNCATE the core journal on '$CORE_CTX/$CORE_NS' and clear gl_snapshots? [y/N] " reply
+  case "$reply" in [yY]*) ;; *) echo "aborted"; exit 1 ;; esac
+fi
 
 psql_core() { kubectl --context "$CORE_CTX" -n "$CORE_NS" exec -i "$CORE_DB_DEPLOY" \
                 -- psql -qtA -U core -d modern_core "$@"; }

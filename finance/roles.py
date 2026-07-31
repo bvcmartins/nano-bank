@@ -62,5 +62,18 @@ STATEMENT_LINE: dict[str, str] = {
 EARNING_ASSET_ROLES: set[str] = {
     "CardReceivable", "OverdraftReceivable", "LoansReceivable", "TreasuryPlacement",
 }
+
+# Asset roles that bear credit loss — the book that expected_loss is charged
+# against. Kept here as a domain classification (like EARNING_ASSET_ROLES) so
+# expected_loss/credit_exposure can be driven off the balance sheet rather than
+# off the loss-rate config: a new receivable role added here without a rate then
+# falls back to the default loss rate and is named, instead of silently
+# contributing zero to both loss and exposure. TreasuryPlacement is intentionally
+# excluded — an interbank/treasury placement is an earning asset but not a retail
+# credit exposure, and defaulting it to the receivable loss rate would overstate.
+CREDIT_EXPOSED_ROLES: set[str] = {
+    "CardReceivable", "OverdraftReceivable", "LoansReceivable",
+    "Receivable", "AccruedInterestReceivable",
+}
 INCOME_ROLES: set[str] = {r for r, l in STATEMENT_LINE.items() if l == "income"}
 EXPENSE_ROLES: set[str] = {r for r, l in STATEMENT_LINE.items() if l == "expense"}

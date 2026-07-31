@@ -18,6 +18,31 @@ def test_grounded_values_parses_numbers_from_tool_outputs():
     assert D("0.2131") in vals
 
 
+def test_grounded_values_ignores_risk_weights_and_prose_noise():
+    """The #3 defect: every literal — risk weights, units/basis prose integers —
+    was flattened into one pool, so an unrelated claim ('NPL is 3%') grounded
+    against a 0.03 loss weight. Numbers are now harvested from value positions
+    only, skipping the weight table and prose fields."""
+    trace = [{"kind": "tool", "name": "raroc", "output": (
+        "{'net_income': '1448.08', "
+        "'risk_weights': {'CardReceivable': '0.75', 'Bank': '0.20'}, "
+        "'assumed_weight_roles': ['Receivable'], "
+        "'period_days': 31, "
+        "'units': {'net_income': 'CAD, 31-day period'}, "
+        "'basis': 'expected loss over 365 days'}")}]
+    vals = verifier.grounded_values(trace)
+    assert D("1448.08") in vals          # a real figure grounds
+    assert D("0.75") not in vals         # a risk weight does not
+    assert D("0.20") not in vals
+    assert D("31") not in vals           # period_days / prose integers do not
+    assert D("365") not in vals
+    # concretely: a claim matching only a risk weight is now flagged
+    assert verifier.ungrounded("Recovery runs at 75%.",
+                               [{"kind": "tool", "name": "raroc",
+                                 "output": "{'risk_weights': {'x': '0.75'}}"}]) \
+        == ["75%"]
+
+
 def test_grounded_values_ignores_model_events_and_empty_output():
     trace = [
         {"kind": "model", "name": "model", "output": None},

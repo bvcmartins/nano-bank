@@ -99,6 +99,13 @@ def test_phantom_grouped_so_npl_reported_once_not_as_two_labels():
     assert claims.unsupported_claims(ans, trace) == ["NPL — no tool provides this"]
 
 
+def test_phantom_plural_spelling_is_flagged():
+    """`\\bnpl\\b` didn't match 'NPLs' — the plural slipped through the guard."""
+    trace = _trace_periods("2026-07")
+    assert claims.unsupported_claims("Our NPLs are rising.", trace) == \
+        ["NPL — no tool provides this"]
+
+
 def test_fabricated_period_acknowledged_in_another_sentence_is_not_flagged():
     """Same root cause on the period side: a non-grounded period the answer
     calls unavailable anywhere is not a fabrication."""

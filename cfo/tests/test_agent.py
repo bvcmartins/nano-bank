@@ -1,3 +1,12 @@
+"""Behaviour tests for the CFO ask() loop.
+
+These exercise what ask() *does* — the revise-once loop and its two trigger
+channels (ungrounded figures, unsupported claims). The prompt's discipline (push
+back on a fabricated NPL, name the period, route hypotheticals to a tool) is a
+behaviour no unit test can assert without a live model, so it is covered by
+`cfo/verify-cfo.sh` against a running stack rather than by asserting substrings
+of CFO_PROMPT — which only pin the wording and fail on any rewording.
+"""
 import asyncio
 from unittest.mock import patch
 from langchain_core.messages import AIMessage
@@ -10,12 +19,6 @@ class _FakeAgent:
     async def ainvoke(self, state, config=None):
         return {"messages": state["messages"] +
                 [AIMessage("RAROC is 18.3%, which is healthy.")]}
-
-
-def test_prompt_pins_discipline():
-    p = cfo_agent.CFO_PROMPT.lower()
-    assert "chief financial officer" in p
-    assert "never" in p and "tool" in p
 
 
 def test_ask_returns_answer_and_thread():
@@ -31,50 +34,6 @@ def test_ask_returns_answer_and_thread():
     assert out["thread_id"] == "t1"
     assert "RAROC" in out["answer"]
     assert isinstance(out["trace"], list)
-
-
-def test_prompt_refuses_unverified_premises():
-    """The CFO's worst failure mode is completing a narrative: given a made-up
-    NPL ratio it will happily explain what is driving it. The prompt has to
-    make a supplied figure a claim to check, not a fact to build on."""
-    p = cfo_agent.CFO_PROMPT.lower()
-    assert "unverified claim" in p
-    assert "cannot see it" in p
-    assert "list_periods does not cover" in p
-
-
-def test_prompt_pins_units_discipline():
-    """expected_loss is annual; netting it against a month of net income turns
-    a profitable month into a fake loss."""
-    p = cfo_agent.CFO_PROMPT.lower()
-    assert "expected_loss_period" in p
-    assert "annual figure" in p
-
-
-def test_prompt_requires_naming_the_period_and_its_limits():
-    """Snapshots are monthly. Asked about 'last quarter' the CFO answered from
-    a single month without saying so — quietly narrowing the question is as
-    misleading as answering it wrong."""
-    p = cfo_agent.CFO_PROMPT.lower()
-    assert "name the period" in p
-    assert "monthly" in p
-
-
-def test_prompt_routes_hypotheticals_to_a_tool():
-    """Asked what a 1% provision would do, the CFO hand-computed the answer and
-    forgot to annualise it — ROE came out 11x too small, tabled beside the
-    correctly annualised current figure."""
-    p = cfo_agent.CFO_PROMPT.lower()
-    assert "provision_scenario" in p
-    assert "do not hand-roll" in p
-
-
-def test_prompt_is_honest_about_close_period():
-    """It claimed to take no actions while holding a tool that writes a GL
-    snapshot — and used it on request."""
-    p = cfo_agent.CFO_PROMPT.lower()
-    assert "close_period" in p
-    assert "no financial actions" in p
 
 
 class _TwoPassAgent:
@@ -142,16 +101,6 @@ def test_ask_does_not_revise_when_all_grounded():
     assert fake.calls == 1                       # no revision
     assert out["verification"]["revised"] is False
     assert out["verification"]["ungrounded"] == []
-
-
-def test_prompt_distinguishes_direct_from_converted_values():
-    """A tool returns NIM as the ratio 0.0628; reporting '6.28%' is a faithful
-    conversion, not a value read verbatim from the field. The CFO must not
-    overstate provenance in either direction."""
-    p = cfo_agent.CFO_PROMPT.lower()
-    assert "verbatim" in p
-    assert "convert" in p        # matches "converted"/"conversion"
-    assert "ratio" in p and "percent" in p
 
 
 class _BadPeriodThenClean:

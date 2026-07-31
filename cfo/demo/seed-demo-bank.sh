@@ -86,7 +86,9 @@ SVC=$(curl -fsS -XPOST "$API/api/v1/auth/service-token" -H 'content-type: applic
 ok "bank API reachable at $API — building $PERIOD ($DAYS days, opening $PRIOR)"
 
 if [ "$RESET" = 1 ]; then
-  bash cfo/demo/reset-gl.sh | sed 's/^/   /'
+  # --yes: the caller already opted into a GL reset by not passing --keep-gl,
+  # and stdin here is a pipe, so reset-gl.sh's own confirm prompt can't read it.
+  bash cfo/demo/reset-gl.sh --yes | sed 's/^/   /'
   ok "GL reset — the opening book below is the whole balance sheet"
 else
   ok "--keep-gl: posting on top of the existing GL"

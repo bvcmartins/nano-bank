@@ -22,6 +22,12 @@ _DEFAULT_LOSS = {
     "OverdraftReceivable": Decimal("0.02"),
     "LoansReceivable": Decimal("0.015"),
 }
+# A credit-exposed role (roles.CREDIT_EXPOSED_ROLES) with no configured loss rate
+# is charged at this rate rather than silently contributing zero expected loss.
+# Set to the highest built-in rate — an unconfigured credit asset is assumed at
+# least as risky as the riskiest configured one — and, like the asset-weight
+# default, it must never be 0.
+_DEFAULT_LOSS_RATE = Decimal("0.03")
 
 
 @dataclass(frozen=True)
@@ -31,6 +37,7 @@ class RiskConfig:
     loss_rates: dict
     target_ratio: Decimal
     default_asset_weight: Decimal = _DEFAULT_ASSET_WEIGHT
+    default_loss_rate: Decimal = _DEFAULT_LOSS_RATE
 
     @classmethod
     def default(cls) -> "RiskConfig":
@@ -43,26 +50,53 @@ class RiskConfig:
         e = os.environ if env is None else env
         weights = dict(_DEFAULT_WEIGHTS)
         loss = dict(_DEFAULT_LOSS)
-        for role in list(weights):
-            if (v := e.get(f"RISK_WEIGHT_{role}")) is not None:
-                weights[role] = Decimal(v)
-        for role in list(loss):
-            if (v := e.get(f"RISK_LOSS_{role}")) is not None:
-                loss[role] = Decimal(v)
+        # Iterate the RISK_WEIGHT_*/RISK_LOSS_* env keys rather than the default
+        # tables, so a role with no built-in default — Receivable,
+        # AccruedInterestReceivable, InputTax — can actually be configured
+        # instead of being pinned to the fallback weight forever.
+        for k, v in e.items():
+            if k.startswith("RISK_WEIGHT_"):
+                weights[k[len("RISK_WEIGHT_"):]] = Decimal(v)
+            elif k.startswith("RISK_LOSS_"):
+                loss[k[len("RISK_LOSS_"):]] = Decimal(v)
         ratio = Decimal(e.get("RISK_TARGET_RATIO", "0.10"))
         default_w = Decimal(e.get("RISK_DEFAULT_ASSET_WEIGHT",
                                   str(_DEFAULT_ASSET_WEIGHT)))
+        default_loss = Decimal(e.get("RISK_DEFAULT_LOSS_RATE",
+                                     str(_DEFAULT_LOSS_RATE)))
         # Enforce the invariant the fallback weight exists to protect: a zero (or
         # negative) default treats every unmapped asset as risk-free, collapsing
         # RWA and economic capital and making RAROC explode. Fail loudly at load
-        # rather than emit silently-wrong capital numbers downstream.
+        # rather than emit silently-wrong capital numbers downstream. The same
+        # reasoning extends to the other capital knobs: a zero target ratio
+        # collapses economic capital just as quietly (raroc then returns None),
+        # and a negative weight or loss rate yields negative RWA / expected loss.
         if default_w <= 0:
             raise ValueError(
                 "RISK_DEFAULT_ASSET_WEIGHT must be > 0 "
                 f"(got {default_w}); a zero/negative default risk-weights "
                 "unmapped assets as risk-free and collapses the capital model")
+        if default_loss <= 0:
+            raise ValueError(
+                "RISK_DEFAULT_LOSS_RATE must be > 0 "
+                f"(got {default_loss}); a zero/negative default charges no "
+                "expected loss on an unconfigured credit asset")
+        if ratio <= 0:
+            raise ValueError(
+                f"RISK_TARGET_RATIO must be > 0 (got {ratio}); a zero/negative "
+                "target ratio zeroes economic capital and collapses RAROC")
+        for role, w in weights.items():
+            if w < 0:
+                raise ValueError(
+                    f"RISK_WEIGHT_{role} must be >= 0 (got {w}); a negative risk "
+                    "weight produces negative risk-weighted assets")
+        for role, r in loss.items():
+            if r < 0:
+                raise ValueError(
+                    f"RISK_LOSS_{role} must be >= 0 (got {r}); a negative loss "
+                    "rate produces negative expected loss")
         return cls(risk_weights=weights, loss_rates=loss, target_ratio=ratio,
-                   default_asset_weight=default_w)
+                   default_asset_weight=default_w, default_loss_rate=default_loss)
 
 
 @dataclass
