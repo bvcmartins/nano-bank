@@ -17,17 +17,17 @@
 /// these are interpolated into SQL, so they must never come from a request.
 /// The values that *do* come from callers (attempt budget, batch size) stay
 /// bound parameters, `$1` and `$2`.
-pub struct OutboxClaim {
+pub struct OutboxClaim<'a> {
     /// The outbox table.
-    pub table: &'static str,
+    pub table: &'a str,
     /// Its primary key, used both to lock and to return.
-    pub id_column: &'static str,
+    pub id_column: &'a str,
     /// The `RETURNING` projection: the id column plus whatever the drainer
     /// needs to deliver the row.
-    pub returning: &'static str,
+    pub returning: &'a str,
 }
 
-impl OutboxClaim {
+impl<'a> OutboxClaim<'a> {
     /// Claim up to `$2` undelivered rows that still have attempts left, oldest
     /// first, incrementing `delivery_attempts` atomically as they are claimed.
     ///
