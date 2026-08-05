@@ -10,6 +10,29 @@ def _short(x: Any, n: int = 2000) -> str:
     return s if len(s) <= n else s[:n] + "…"
 
 
+def _model_output(response) -> dict:
+    """Pull the interesting parts of a chat-model turn out of the LLMResult:
+    what the model *said* (content), the hidden reasoning if the backend emits
+    it, and which tools it decided to call. Best-effort — never raises."""
+    try:
+        gen = response.generations[0][0]
+        msg = getattr(gen, "message", None)
+        if msg is None:
+            return {"content": _short(getattr(gen, "text", "") or "")}
+        content = msg.content if isinstance(msg.content, str) else str(msg.content)
+        calls = [{"name": tc.get("name"), "args": tc.get("args", {})}
+                 for tc in (getattr(msg, "tool_calls", None) or [])]
+        ak = getattr(msg, "additional_kwargs", None) or {}
+        reasoning = ak.get("reasoning_content") or ak.get("reasoning")
+        out: dict = {"content": _short(content), "tool_calls": calls}
+        if reasoning:
+            out["reasoning"] = _short(reasoning if isinstance(reasoning, str)
+                                      else str(reasoning))
+        return out
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 class TraceRecorder(BaseCallbackHandler):
     """Records tool/model steps of a LangGraph run as ordered, JSON-safe events.
     Each closed event carries a wall-clock `t` so it can be merged with the
@@ -46,7 +69,16 @@ class TraceRecorder(BaseCallbackHandler):
     def on_llm_end(self, response, **kwargs):
         rid = kwargs.get("run_id")
         if rid in self._open:
-            self._close(rid, ok=True, output=None)
+            self._close(rid, ok=True, output=_model_output(response))
+
+    def mark(self, label: str, **detail) -> None:
+        """Insert a phase divider (e.g. the verifier's revise round-trip) so the
+        merged trace shows where one stage ends and the next begins."""
+        self._events.append({
+            "seq": len(self._events), "t": time.time(),
+            "kind": "phase", "name": label, "ok": True, "elapsed_ms": None,
+            "input": None, "output": (detail or None), "error": None,
+        })
 
     def _close(self, rid, *, ok, output=None, error=None):
         info = self._open.pop(rid, None)

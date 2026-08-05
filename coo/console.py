@@ -9,7 +9,7 @@ import streamlit as st
 # repo root, so the `coo` package isn't importable by default. Add the repo root.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from coo.verifier import badge  # noqa: E402
-from coo.trace_view import extract_highlights  # noqa: E402
+from coo.trace_view import extract_highlights, to_steps  # noqa: E402
 
 API = os.environ.get("COO_API_URL", "http://localhost:8093")
 
@@ -74,16 +74,30 @@ if prompt := st.chat_input("Ask the COO about how the bank is running…"):
                 chips.append(f"📦 compaction ×{len(h['compactions'])}")
             if chips:
                 st.caption(" · ".join(chips))
-            with st.expander("harness trace"):
-                for sa in h["subagents"]:
-                    st.markdown(
-                        f"**subagent** (depth {sa['depth']}, "
-                        f"tools=`{', '.join(sa['tools'])}`, {sa['chars']} chars): "
-                        f"{sa['task'][:160]}")
+            # The run tree: the model's back-and-forth, tool calls with their
+            # input/output, the subagent hand-off, and the verifier's revise pass
+            # — LangSmith-style, so you can inspect how the answer was reached.
+            with st.expander("🔎 run trace — reasoning & tool calls", expanded=False):
+                for step in to_steps(trace):
+                    if step["kind"] == "phase":
+                        st.markdown(f"---\n#### {step['icon']} {step['title']}")
+                        if step["subtitle"]:
+                            st.caption(step["subtitle"])
+                        continue
+                    head = f"{step['icon']} **{step['title']}**"
+                    if step["timing"]:
+                        head += f"  ·  `{step['timing']}`"
+                    if step["subtitle"]:
+                        head += f"  ·  {step['subtitle']}"
+                    st.markdown(head)
+                    for label, text in step["body"].items():
+                        st.caption(label)
+                        st.code(text, language=None)
                 if veri:
                     st.markdown(
-                        f"**grounded** {veri.get('grounded', [])}  \n"
-                        f"**ungrounded** {veri.get('ungrounded', [])}  \n"
-                        f"**revised** {veri.get('revised', False)}")
-                st.json(trace, expanded=False)
+                        f"---\n**verification** — grounded {veri.get('grounded', [])} · "
+                        f"ungrounded {veri.get('ungrounded', [])} · "
+                        f"revised {veri.get('revised', False)}")
+                with st.expander("raw trace (json)"):
+                    st.json(trace, expanded=False)
         st.session_state.history.append(("assistant", answer))

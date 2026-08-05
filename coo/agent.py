@@ -79,6 +79,7 @@ async def ask(settings: Settings, message: str, thread_id: Optional[str] = None,
     clms = claims.unsupported_claims(answer, rec.events())
     if figs or clms:
         revised = True
+        rec.mark("revision", figures=figs, claims=clms)
         nudge = verifier.revise_prompt(figs, clms)
         out = await agent.ainvoke({"messages": [HumanMessage(nudge)]}, config=cfg)
         answer = _last_ai_text(out)
