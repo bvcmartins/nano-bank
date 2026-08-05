@@ -38,9 +38,20 @@ class TraceRecorder(BaseCallbackHandler):
     Each closed event carries a wall-clock `t` so it can be merged with the
     harness event log (compaction / subagent) into one ordered trace."""
 
-    def __init__(self):
+    def __init__(self, on_event=None):
         self._open: dict = {}      # run_id -> {kind, name, t0, input}
         self._events: list[dict] = []
+        # Optional live hook: called with each event the instant it closes, so a
+        # streaming endpoint can push steps to the UI as they happen. Called on
+        # the event loop (our tools are async), so it must not block.
+        self.on_event = on_event
+
+    def _emit(self, event: dict) -> None:
+        if self.on_event is not None:
+            try:
+                self.on_event(event)
+            except Exception:  # noqa: BLE001 — a broken sink must not kill the run
+                pass
 
     # --- tools ---
     def on_tool_start(self, serialized, input_str, **kwargs):
@@ -48,6 +59,7 @@ class TraceRecorder(BaseCallbackHandler):
         name = (serialized or {}).get("name", "tool")
         self._open[rid] = {"kind": "tool", "name": name,
                            "t0": time.perf_counter(), "input": _short(input_str)}
+        self._emit({"kind": "start", "of": "tool", "name": name})
 
     def on_tool_end(self, output, **kwargs):
         # Full output, not _short: the verifier parses these numbers to build
@@ -65,6 +77,7 @@ class TraceRecorder(BaseCallbackHandler):
         name = (serialized or {}).get("name", "model")
         self._open[rid] = {"kind": "model", "name": name,
                            "t0": time.perf_counter(), "input": None}
+        self._emit({"kind": "start", "of": "model", "name": name})
 
     def on_llm_end(self, response, **kwargs):
         rid = kwargs.get("run_id")
@@ -79,6 +92,7 @@ class TraceRecorder(BaseCallbackHandler):
             "kind": "phase", "name": label, "ok": True, "elapsed_ms": None,
             "input": None, "output": (detail or None), "error": None,
         })
+        self._emit(self._events[-1])
 
     def _close(self, rid, *, ok, output=None, error=None):
         info = self._open.pop(rid, None)
@@ -90,6 +104,7 @@ class TraceRecorder(BaseCallbackHandler):
             "ok": ok, "elapsed_ms": int((time.perf_counter() - info["t0"]) * 1000),
             "input": info.get("input"), "output": output, "error": error,
         })
+        self._emit(self._events[-1])
 
     def events(self) -> list[dict]:
         return list(self._events)

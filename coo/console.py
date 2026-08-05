@@ -1,5 +1,8 @@
-"""Streamlit chat console for the Agent COO. Talks to the COO /ask endpoint."""
+"""Streamlit chat console for the Agent COO. Streams the COO's run live so the
+view fills in as the model reasons and calls tools, instead of blocking on the
+whole turn; then shows the answer + a full run-tree inspector."""
 from __future__ import annotations
+import json
 import os
 import sys
 import httpx
@@ -25,35 +28,94 @@ for role, text in st.session_state.history:
     with st.chat_message(role):
         st.markdown(text)
 
+
+def _live_line(step: dict) -> str:
+    """A compact one-liner for the live ticker as a step streams in."""
+    s = f"{step['icon']} **{step['title']}**"
+    if step["timing"]:
+        s += f"  ·  `{step['timing']}`"
+    if step["subtitle"]:
+        s += f"  —  {step['subtitle']}"
+    return s
+
+
+def render_run_tree(trace: list[dict], veri: dict | None) -> None:
+    """The full, expandable run tree: model reasoning, tool input→output, the
+    subagent hand-off, memory, and the verifier's revise divider."""
+    with st.expander("🔎 run trace — reasoning & tool calls", expanded=False):
+        for step in to_steps(trace):
+            if step["kind"] == "phase":
+                st.markdown(f"---\n#### {step['icon']} {step['title']}")
+                if step["subtitle"]:
+                    st.caption(step["subtitle"])
+                continue
+            head = f"{step['icon']} **{step['title']}**"
+            if step["timing"]:
+                head += f"  ·  `{step['timing']}`"
+            if step["subtitle"]:
+                head += f"  ·  {step['subtitle']}"
+            st.markdown(head)
+            for label, text in step["body"].items():
+                st.caption(label)
+                st.code(text, language=None)
+        if veri:
+            st.markdown(
+                f"---\n**verification** — grounded {veri.get('grounded', [])} · "
+                f"ungrounded {veri.get('ungrounded', [])} · "
+                f"revised {veri.get('revised', False)}")
+        with st.expander("raw trace (json)"):
+            st.json(trace, expanded=False)
+
+
 if prompt := st.chat_input("Ask the COO about how the bank is running…"):
     st.session_state.history.append(("user", prompt))
     with st.chat_message("user"):
         st.markdown(prompt)
+
     with st.chat_message("assistant"):
-        veri = None
+        answer, veri, trace = "(no answer)", None, []
         try:
-            r = httpx.post(f"{API}/ask",
-                           json={"message": prompt,
-                                 "thread_id": st.session_state.thread_id},
-                           timeout=600)
-            r.raise_for_status()
-            data = r.json()
-            st.session_state.thread_id = data.get("thread_id")
-            answer = data.get("answer", "(no answer)")
-            veri = data.get("verification")
-            trace = data.get("trace", [])
+            # Stream the run: each step renders into the live status the instant it
+            # closes, so the console is never blank while the COO works.
+            with st.status("Working…", expanded=True) as live, \
+                    httpx.stream("POST", f"{API}/ask/stream",
+                                 json={"message": prompt,
+                                       "thread_id": st.session_state.thread_id},
+                                 timeout=600) as r:
+                r.raise_for_status()
+                for raw in r.iter_lines():
+                    if not raw:
+                        continue
+                    msg = json.loads(raw)
+                    if "event" in msg:
+                        ev = msg["event"]
+                        if ev.get("kind") == "start":
+                            # Immediate "currently doing X" feedback, before the
+                            # step (and its timing) close — so it's never blank
+                            # while a slow model turn generates.
+                            live.update(label=("🧠 model reasoning…"
+                                               if ev.get("of") == "model"
+                                               else f"🔧 {ev.get('name')}…"))
+                            continue
+                        for step in to_steps([ev]):
+                            live.update(label=f"{step['icon']} {step['title']}")
+                            live.write(_live_line(step))
+                    elif "final" in msg:
+                        f = msg["final"]
+                        answer = f.get("answer", "(no answer)")
+                        veri = f.get("verification")
+                        trace = f.get("trace", [])
+                        st.session_state.thread_id = f.get("thread_id")
+                live.update(label="Done", state="complete", expanded=False)
         except Exception as e:  # noqa: BLE001
             answer = f"⚠️ COO unreachable: {e}"
-            trace = []
+
         st.markdown(answer)
         if veri is not None:
             line = badge(veri)
-            if veri.get("ungrounded") or veri.get("unsupported_claims"):
-                st.warning(line)
-            else:
-                st.caption(line)
-        # What the harness actually did this turn — plan/todos/subagent/memory,
-        # so a viewer can see the machinery behind the answer, not just the text.
+            (st.warning if (veri.get("ungrounded") or veri.get("unsupported_claims"))
+             else st.caption)(line)
+        # At-a-glance chips + the full run-tree inspector.
         if trace:
             h = extract_highlights(trace)
             chips = []
@@ -74,30 +136,5 @@ if prompt := st.chat_input("Ask the COO about how the bank is running…"):
                 chips.append(f"📦 compaction ×{len(h['compactions'])}")
             if chips:
                 st.caption(" · ".join(chips))
-            # The run tree: the model's back-and-forth, tool calls with their
-            # input/output, the subagent hand-off, and the verifier's revise pass
-            # — LangSmith-style, so you can inspect how the answer was reached.
-            with st.expander("🔎 run trace — reasoning & tool calls", expanded=False):
-                for step in to_steps(trace):
-                    if step["kind"] == "phase":
-                        st.markdown(f"---\n#### {step['icon']} {step['title']}")
-                        if step["subtitle"]:
-                            st.caption(step["subtitle"])
-                        continue
-                    head = f"{step['icon']} **{step['title']}**"
-                    if step["timing"]:
-                        head += f"  ·  `{step['timing']}`"
-                    if step["subtitle"]:
-                        head += f"  ·  {step['subtitle']}"
-                    st.markdown(head)
-                    for label, text in step["body"].items():
-                        st.caption(label)
-                        st.code(text, language=None)
-                if veri:
-                    st.markdown(
-                        f"---\n**verification** — grounded {veri.get('grounded', [])} · "
-                        f"ungrounded {veri.get('ungrounded', [])} · "
-                        f"revised {veri.get('revised', False)}")
-                with st.expander("raw trace (json)"):
-                    st.json(trace, expanded=False)
+            render_run_tree(trace, veri)
         st.session_state.history.append(("assistant", answer))

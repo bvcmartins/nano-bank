@@ -2,8 +2,9 @@
 wrapped in the harness. Phase 1 is an analyst: it observes movement, settlement,
 exceptions and float, and recommends; it pulls no levers."""
 from __future__ import annotations
+import asyncio
 import uuid
-from typing import Optional
+from typing import AsyncIterator, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
@@ -87,3 +88,79 @@ async def ask(settings: Settings, message: str, thread_id: Optional[str] = None,
     trace = merge(rec.events(), log.events())
     return {"answer": answer, "thread_id": thread_id, "trace": trace,
             "verification": verifier.report(answer, rec.events(), revised=revised)}
+
+
+_SENTINEL = object()
+
+
+async def ask_stream(settings: Settings, message: str,
+                     thread_id: Optional[str] = None, *, memory=None
+                     ) -> AsyncIterator[dict]:
+    """Like `ask`, but yields the run as it happens: `{"event": <trace event>}`
+    for each start/step/phase the instant it fires, then exactly one
+    `{"final": {answer, thread_id, trace, verification}}`. Same verify-then-revise
+    flow as `ask`; the console renders each event live so it is never blank."""
+    thread_id = thread_id or f"coo-{uuid.uuid4().hex[:6]}"
+    if memory is None:
+        try:
+            memory = SafeMemory(HarnessMemory.from_settings(settings))
+        except Exception:  # noqa: BLE001
+            memory = SafeMemory(None)
+    tools = await get_tools(settings)
+    q: asyncio.Queue = asyncio.Queue()
+    # Callbacks fire on this loop (our tools are async), so a plain put_nowait is
+    # safe and keeps ordering intact.
+    rec = TraceRecorder(on_event=q.put_nowait)
+    agent, log = assemble(mf.llm(), tools, COO_PROMPT, memory,
+                          thread_id=thread_id, checkpointer=_CHECKPOINTER,
+                          context_token_threshold=settings.context_token_threshold,
+                          subagent_max_depth=settings.subagent_max_depth)
+    cfg = {"configurable": {"thread_id": thread_id}, "recursion_limit": 60,
+           "callbacks": [rec]}
+
+    def _spawn(payload) -> "asyncio.Task":
+        # A sentinel on completion (via done_callback, not a polling timeout) is
+        # race-free: every put_nowait from the run lands on the queue before the
+        # sentinel, so draining until the sentinel loses nothing.
+        t = asyncio.create_task(agent.ainvoke(payload, config=cfg))
+        t.add_done_callback(lambda _t: q.put_nowait(_SENTINEL))
+        return t
+
+    async def _pump(task):
+        while True:
+            item = await q.get()
+            if item is _SENTINEL:
+                return
+            yield {"event": item}
+
+    try:
+        t1 = _spawn({"messages": [HumanMessage(message)], "plan": [], "todos": [],
+                     "running_summary": "", "depth": 0})
+        async for chunk in _pump(t1):
+            yield chunk
+        answer = _last_ai_text(t1.result())   # re-raises if the run failed
+
+        revised = False
+        figs = verifier.ungrounded(answer, rec.events())
+        clms = claims.unsupported_claims(answer, rec.events())
+        if figs or clms:
+            revised = True
+            rec.mark("revision", figures=figs, claims=clms)  # onto the queue
+            nudge = verifier.revise_prompt(figs, clms)
+            t2 = _spawn({"messages": [HumanMessage(nudge)]})
+            async for chunk in _pump(t2):
+                yield chunk
+            answer = _last_ai_text(t2.result())
+
+        trace = merge(rec.events(), log.events())
+        yield {"final": {"answer": answer, "thread_id": thread_id, "trace": trace,
+                         "verification": verifier.report(answer, rec.events(),
+                                                          revised=revised)}}
+    except Exception as e:  # noqa: BLE001
+        # Headers are already sent, so a 500 can't reach the client — always close
+        # the stream with a terminal message the console can render.
+        yield {"final": {"answer": f"⚠️ the COO run failed: {type(e).__name__}: {e}",
+                         "thread_id": thread_id,
+                         "trace": merge(rec.events(), log.events()),
+                         "verification": {"grounded": [], "ungrounded": [],
+                                          "unsupported_claims": [], "revised": False}}}
