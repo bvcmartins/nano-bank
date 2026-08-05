@@ -132,4 +132,11 @@ def cards_summary(payload: dict) -> dict:
             "basis": holds.get("basis"),
         },
         "captured": {"count": cap_count, "amount": cap_amount},
+        # Engagement over the window: distinct cardholders vs one-and-done. The
+        # single_purchase share of active is the "used the card only once" rate.
+        "cardholders": {
+            "active": int((payload.get("cardholders") or {}).get("active", 0)),
+            "single_purchase": int(
+                (payload.get("cardholders") or {}).get("single_purchase", 0)),
+        },
     }

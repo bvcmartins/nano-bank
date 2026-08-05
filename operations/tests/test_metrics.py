@@ -92,6 +92,7 @@ def test_cards_summary_holds_and_captured():
     payload = {
         "window": "30d",
         "since": "2026-07-01T00:00:00Z",
+        "cardholders": {"active": 8, "single_purchase": 3},
         "authorization_holds": {"open_count": 4, "open_amount": "220.00",
                                 "as_of": "2026-08-05T12:00:00Z",
                                 "basis": "open now; not windowed"},
@@ -107,3 +108,4 @@ def test_cards_summary_holds_and_captured():
     assert out["open_holds"]["basis"] == "open now; not windowed"
     assert out["captured"]["count"] == 5
     assert out["captured"]["amount"] == D("250.00")
+    assert out["cardholders"] == {"active": 8, "single_purchase": 3}

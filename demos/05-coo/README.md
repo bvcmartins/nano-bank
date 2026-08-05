@@ -53,7 +53,7 @@ expandable **harness trace** panel update per turn.
 | # | Ask | What it demonstrates |
 |---|-----|----------------------|
 | 1 | 30-day operational health review + subagent deep-dive on the busiest rail | **Grounded reads** across float/txns/rails/exceptions/cards; the harness **plans**, keeps **todos**, and **spawns a subagent** for a focused rail deep-dive (its tool chatter never enters the main context) |
-| 2 | "Average dollar size of a card purchase?" | A **derived figure** the raw tools don't return: the COO pulls total + count, calls the deterministic **`compute`** tool to divide them, and answers it **grounded** ($288.31) — no hand-arithmetic, no "you do the math," and the verifier still guards it |
+| 2 | "What share of cardholders used the card only once (disengagement)?" | A **derived figure** the raw tools don't return: the COO pulls active vs one-and-done cardholders and calls the deterministic **`compute`** tool to turn them into a %, answered **grounded** — no hand-arithmetic, no "you do the math," and the verifier still guards it |
 | 3a | "Record a durable note: busiest rail + one risk to watch" | Durable **memory write** |
 | 3b | *(fresh conversation)* "Recall that note; where should ops focus?" | **Memory recall across turns** — a new thread with no shared state, so the only way it knows the note is durable Qdrant memory, not in-thread history |
 | 4 | "Fraud rate looks high — what's driving it?" and "What was our NIM and RAROC?" | **Scope discipline** — fraud/AML is deliberately unreachable, and the books are the CFO's domain; the COO refuses rather than engaging |

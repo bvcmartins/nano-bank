@@ -762,6 +762,16 @@ struct CardTxnGroup {
     total: Decimal,
 }
 
+/// Cardholder engagement over the window: how many distinct cardholders made a
+/// purchase, and how many made **exactly one** (a one-and-done / disengagement
+/// signal). Both are windowed. `single_purchase` as a share of `active` is the
+/// "used the card only once" rate the COO can compute via the `compute` tool.
+#[derive(Serialize)]
+struct CardholderEngagement {
+    active: i64,
+    single_purchase: i64,
+}
+
 #[derive(Serialize)]
 struct CardsResponse {
     window: String,
@@ -771,6 +781,8 @@ struct CardsResponse {
     authorization_holds: AuthorizationHolds,
     /// Card-tagged transactions (`product = 'card'`) over the window.
     card_transactions: Vec<CardTxnGroup>,
+    /// Distinct vs one-and-done cardholders (by `card_purchase`) over the window.
+    cardholders: CardholderEngagement,
 }
 
 /// Observable card operations: currently-open authorization holds (a now
@@ -816,10 +828,33 @@ async fn ops_cards(
     .await
     .map_err(AppError::Database)?;
 
+    // A card_purchase is stamped with the cardholder as `initiated_by`, so
+    // distinct/one-and-done cardholders come straight off the transactions table.
+    let active_cardholders = count_since(
+        &state.pool,
+        "SELECT COUNT(DISTINCT initiated_by) FROM transactions
+         WHERE transaction_type = 'card_purchase' AND created_at >= $1",
+        since,
+    )
+    .await?;
+    let single_purchase = count_since(
+        &state.pool,
+        "SELECT COUNT(*) FROM (
+            SELECT initiated_by FROM transactions
+            WHERE transaction_type = 'card_purchase' AND created_at >= $1
+            GROUP BY initiated_by HAVING COUNT(*) = 1) t",
+        since,
+    )
+    .await?;
+
     Ok(Json(CardsResponse {
         window,
         since,
         authorization_holds,
         card_transactions,
+        cardholders: CardholderEngagement {
+            active: active_cardholders,
+            single_purchase,
+        },
     }))
 }

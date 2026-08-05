@@ -23,14 +23,14 @@ task + char count show in the **harness trace** expander.
 ## 2 · Derived figure, still grounded (the `compute` tool)
 
 ```
-Over the last 30 days, what was the average dollar size of a single card purchase? Give me just that one number.
+Of the cardholders who used their card in the last 30 days, what share used it only once? I'm worried about disengagement.
 ```
 
-Watch for: an average is a *derived* number the raw tools don't return, so the COO
-pulls the components (`🔧 cards` → total + count) and then calls `🔧 compute` to
-divide them — answering **$288.31**, tool-grounded, without doing the math itself
-and without telling you to calculate it. The deterministic verifier still guards
-every figure; the number is grounded because a tool produced it.
+Watch for: a *derived* figure the raw tools don't return. The COO pulls the
+components (`🔧 cards` → active vs one-and-done cardholders) then calls `🔧 compute`
+to turn them into a percentage — answering the one-and-done rate, tool-grounded,
+without doing the math itself. The deterministic verifier still guards every
+figure; the number is grounded because a tool produced it.
 
 ## 3 · Memory — record a durable note
 
