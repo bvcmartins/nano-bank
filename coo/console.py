@@ -9,7 +9,7 @@ import streamlit as st
 # repo root, so the `coo` package isn't importable by default. Add the repo root.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from coo.verifier import badge  # noqa: E402
-from coo.demo.drive import extract_highlights  # noqa: E402
+from coo.trace_view import extract_highlights  # noqa: E402
 
 API = os.environ.get("COO_API_URL", "http://localhost:8093")
 

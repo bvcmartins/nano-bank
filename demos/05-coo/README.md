@@ -22,13 +22,13 @@ an app process or a k8s manifest.
 
 ```bash
 # up (modern core + bank + agent + COO) → seed → narrated arc
-coo/demo/run-demo.sh
+demos/05-coo/run-demo.sh
 
 # variations
-coo/demo/run-demo.sh --no-up       # stack already deployed
-coo/demo/run-demo.sh --no-seed     # leave the bank's data as-is
-coo/demo/run-demo.sh --beats 1,5   # only these beats
-coo/demo/run-demo.sh --down        # tear down the demo port-forwards
+demos/05-coo/run-demo.sh --no-up       # stack already deployed
+demos/05-coo/run-demo.sh --no-seed     # leave the bank's data as-is
+demos/05-coo/run-demo.sh --beats 1,5   # only these beats
+demos/05-coo/run-demo.sh --down        # tear down the demo port-forwards
 ```
 
 Prereqs: `docker` + `kind` + `kubectl` + `uv`, and the sibling

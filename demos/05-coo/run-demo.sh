@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # One-command COO demo: bring the in-cluster stack up, seed a bounded burst of
-# demo activity, and run the narrated /ask arc (coo/demo/drive.py).
+# demo activity, and run the narrated /ask arc (demos/05-coo/drive.py).
 #
 # Runtime is the kind clusters (see scripts/deploy-all.sh + coo/k8s/deploy.sh).
 # Seeding is DEMO/TEST-ONLY — it runs here from the host against a port-forwarded
 # bank, never from an app process or a k8s manifest.
 #
-#   coo/demo/run-demo.sh                 # up (if needed) -> seed -> drive
-#   coo/demo/run-demo.sh --no-up         # assume the stack is already deployed
-#   coo/demo/run-demo.sh --no-seed       # don't add demo activity (leave data as-is)
-#   coo/demo/run-demo.sh --beats 1,5     # only these beats
-#   coo/demo/run-demo.sh --down          # just tear down the port-forwards and exit
+#   demos/05-coo/run-demo.sh                 # up (if needed) -> seed -> drive
+#   demos/05-coo/run-demo.sh --no-up         # assume the stack is already deployed
+#   demos/05-coo/run-demo.sh --no-seed       # don't add demo activity (leave data as-is)
+#   demos/05-coo/run-demo.sh --beats 1,5     # only these beats
+#   demos/05-coo/run-demo.sh --down          # just tear down the port-forwards and exit
 #
 # Prereqs: docker + kind + kubectl + uv, and (for bring-up) the sibling
 # nano-bank-modern-core repo checked out beside this one.
@@ -82,7 +82,7 @@ fi
 
 # Drive the narrated arc. The driver only speaks HTTP to the COO, so it needs
 # just httpx — a tiny venv, not the COO's full (torch/fastembed) requirements.
-VENV="coo/demo/.venv"
+VENV="demos/05-coo/.venv"
 if [ ! -x "$VENV/bin/python" ]; then
   echo "🐍 creating demo venv ($VENV) via uv ..."
   uv venv "$VENV" >/dev/null
@@ -91,4 +91,4 @@ fi
 
 echo "🎬 running the narrated COO demo ..."
 COO_API_URL=http://localhost:8093 PYTHONPATH="$PWD" \
-  "$VENV/bin/python" coo/demo/drive.py $BEATS_ARG
+  "$VENV/bin/python" demos/05-coo/drive.py $BEATS_ARG

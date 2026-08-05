@@ -6,11 +6,11 @@ beat: the question, the answer, the verification badge, and the harness trace
 highlights (plan / todos / subagent / memory). It is a *demo* — it never seeds
 and never mutates the bank; it only asks the read-only COO questions.
 
-    COO_API_URL=http://localhost:8093 python coo/demo/drive.py
-    python coo/demo/drive.py --beats 1,5      # run a subset
+    COO_API_URL=http://localhost:8093 python demos/05-coo/drive.py
+    python demos/05-coo/drive.py --beats 1,5      # run a subset
 
 The stack (bank + operations MCP + COO, and Qdrant for the memory beat) must
-already be up — see coo/demo/run-demo.sh, which brings it up and calls this.
+already be up — see demos/05-coo/run-demo.sh, which brings it up and calls this.
 """
 from __future__ import annotations
 import argparse
@@ -20,12 +20,12 @@ import textwrap
 
 import httpx
 
-API = os.environ.get("COO_API_URL", "http://localhost:8093")
+# demos/05-coo/drive.py -> repo root, so the pure `coo.trace_view` helper imports
+# even when this script is run standalone (it pulls in no heavy deps).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from coo.trace_view import extract_highlights  # noqa: E402
 
-# Harness/plumbing tools are reported specially; everything else a beat calls is
-# a domain (operations) tool worth naming in the "tools" line.
-_HARNESS_TOOLS = {"write_plan", "update_plan", "write_todos",
-                  "recall_memory", "record_memory", "spawn_subagent"}
+API = os.environ.get("COO_API_URL", "http://localhost:8093")
 
 # --- ANSI (no dependency; degrade to plain if not a tty) -------------------
 _TTY = sys.stdout.isatty()
@@ -41,41 +41,6 @@ def cyan(s):   return _c("36", s)
 def green(s):  return _c("32", s)
 def yellow(s): return _c("33", s)
 def red(s):    return _c("31", s)
-
-
-# --- pure trace analysis (unit-testable: dict-in / dict-out) ----------------
-def extract_highlights(trace: list[dict]) -> dict:
-    """Distil a merged COO trace into the few things a demo viewer cares about."""
-    plan, todos, domain_tools = [], [], []
-    subagents, compactions = [], []
-    recalls = records = 0
-    for ev in trace:
-        kind, name = ev.get("kind"), ev.get("name")
-        if kind == "tool":
-            if name == "write_plan":
-                plan.append(ev.get("input") or "")
-            elif name in ("write_todos", "update_plan"):
-                todos.append(ev.get("input") or "")
-            elif name == "recall_memory":
-                recalls += 1
-            elif name == "record_memory":
-                records += 1
-            elif name not in _HARNESS_TOOLS:
-                domain_tools.append(name)
-        elif kind == "subagent":
-            subagents.append({"task": ev.get("task", ""), "tools": ev.get("tools", []),
-                              "depth": ev.get("depth"), "chars": ev.get("chars")})
-        elif kind == "memory_write":
-            records += 1  # harness-side record events
-        elif kind == "compaction":
-            compactions.append({"dropped": ev.get("dropped"), "kept": ev.get("kept")})
-    # dedup domain tools preserving order, with call counts
-    counts: dict[str, int] = {}
-    for t in domain_tools:
-        counts[t] = counts.get(t, 0) + 1
-    return {"plan": plan, "todos": todos, "tools": counts,
-            "subagents": subagents, "recalls": recalls, "records": records,
-            "compactions": compactions}
 
 
 def verification_line(veri: dict | None) -> str:
@@ -234,7 +199,7 @@ def main() -> int:
     print(bold(f"nano-bank Agent COO — narrated demo  ({API})"))
     if not health_ok():
         print(red(f"COO /health not OK at {API}. Bring the stack up first "
-                  "(coo/demo/run-demo.sh) or set COO_API_URL."))
+                  "(demos/05-coo/run-demo.sh) or set COO_API_URL."))
         return 1
 
     threads: dict[str, str] = {}   # label -> thread_id
