@@ -8,6 +8,18 @@
 
 **Tech Stack:** Rust, `sqlx` 0.7 (Postgres), `tokio`, `uuid`. Test lives under `api/tests/`.
 
+> **Implementation note (deviation from Task 2 as first drafted):** the original
+> Task 2 raced two claims with `tokio::join!`. On the current-thread test runtime
+> the two futures ran effectively serially — claim B ran after A had committed and
+> re-claimed the same still-eligible rows (all identical), a false failure. The
+> shipped test instead uses **deterministic contention**: open transaction A and
+> claim (locking rows, *uncommitted*), then claim in transaction B while A holds
+> those locks — the exact condition `FOR UPDATE SKIP LOCKED` exists for. A takes
+> its full batch (30), B skips the locked rows and takes the remainder (20),
+> disjoint. Verified to *hang* (deadlock, caught by `timeout`) when `SKIP LOCKED`
+> is removed. The code blocks below reflect the original draft; the committed
+> `api/tests/outbox.rs` is the deterministic version.
+
 ## Global Constraints
 
 - **DB host is `::1`, not `127.0.0.1`** (dead docker-proxy on IPv4). The test DB URL default is `postgres://nanobank_user:secure_nano_password_2024!@[::1]:5432/nano_bank_db`, overridable via `NANO_BANK_TEST_DB_URL`.
