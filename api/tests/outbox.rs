@@ -172,3 +172,38 @@ async fn concurrent_claims_are_exactly_once() {
 
     drop_table(&pool, &table).await;
 }
+
+#[tokio::test]
+async fn claim_skips_rows_past_the_attempt_budget() {
+    let Some(pool) = test_db().await else { return };
+    let table = make_table(&pool).await;
+
+    // One under-budget row and one already at the cap (a dead letter).
+    sqlx::query(&format!(
+        "INSERT INTO {table} (delivery_attempts) VALUES (0), ($1)"
+    ))
+    .bind(MAX_ATTEMPTS)
+    .execute(&pool)
+    .await
+    .expect("seed budget rows");
+
+    let sql = OutboxClaim {
+        table: &table,
+        id_column: "id",
+        returning: "id, delivery_attempts",
+    }
+    .sql();
+    let rows = sqlx::query(&sql)
+        .bind(MAX_ATTEMPTS)
+        .bind(10i64)
+        .fetch_all(&pool)
+        .await
+        .expect("claim");
+
+    // The `delivery_attempts < $1` predicate leaves the capped row behind.
+    assert_eq!(rows.len(), 1, "capped row must not be claimed");
+    let attempts: i32 = rows[0].get("delivery_attempts");
+    assert_eq!(attempts, 1, "claimed row incremented 0 -> 1");
+
+    drop_table(&pool, &table).await;
+}
