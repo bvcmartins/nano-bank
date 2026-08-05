@@ -72,6 +72,22 @@ def test_exceptions_summary_sums_counts():
     assert out["by_kind"]["rejected_aft_entries"] == 3
 
 
+def test_compute_derived_figures():
+    # the average-card-purchase case that used to make the COO refuse
+    assert metrics.compute("ratio", [9802.52, 34])["result"] == D("288.3094")
+    assert metrics.compute("mean", [10, 20, 30])["result"] == D("20.00")
+    assert metrics.compute("sum", ["100.00", "50.00"])["result"] == D("150.00")
+    assert metrics.compute("percent", [1122981.14, 1179606.42])["result"] == D("95.20")
+    assert metrics.compute("difference", [100, 40])["result"] == D("60.00")
+    assert metrics.compute("product", [3, 4])["result"] == D("12.00")
+
+
+def test_compute_guards_bad_input():
+    assert "error" in metrics.compute("ratio", [5])            # missing denominator
+    assert "error" in metrics.compute("percent", [5, 0])       # zero denominator
+    assert "error" in metrics.compute("bogus", [1, 2])         # unknown op
+
+
 def test_cards_summary_holds_and_captured():
     payload = {
         "window": "30d",

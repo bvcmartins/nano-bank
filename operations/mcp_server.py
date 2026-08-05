@@ -54,6 +54,19 @@ def build_mcp(bank: BankClient) -> FastMCP:
         return _stringify(metrics.cards_summary(bank.cards(window)))
 
     @mcp.tool()
+    def compute(operation: str, values: list[float]) -> dict:
+        """Deterministic arithmetic on numbers you already got from other tools,
+        so a derived figure stays tool-grounded — use this instead of doing math
+        yourself, and never tell the user to calculate it.
+
+        operation: mean | sum | ratio | percent | difference | product.
+        values: the exact tool-returned numbers, in order. Examples:
+          average card purchase → ratio, values=[total, count]
+          Lynx's share of value → percent, values=[lynx_total, all_total]
+          net change            → difference, values=[a, b]"""
+        return _stringify(metrics.compute(operation, values))
+
+    @mcp.tool()
     def operations_health(window: str = "24h") -> dict:
         """One-shot bundle: float, transactions, rails, exceptions and cards for a window."""
         return _stringify(

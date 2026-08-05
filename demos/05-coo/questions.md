@@ -20,15 +20,17 @@ Watch for: `🗺️ planned · ✅ todos · 🔧 tools · 🧵 subagent` in the 
 every figure tool-grounded, and the float quoted with its basis. The subagent's
 task + char count show in the **harness trace** expander.
 
-## 2 · Verifier catches an ungrounded figure
+## 2 · Derived figure, still grounded (the `compute` tool)
 
 ```
 Over the last 30 days, what was the average dollar size of a single card purchase? Give me just that one number.
 ```
 
-Watch for: the badge flips to `⚠` — an average is a *derived* number no tool
-returns — and after one revise pass the COO either removes it or labels it as its
-own estimate.
+Watch for: an average is a *derived* number the raw tools don't return, so the COO
+pulls the components (`🔧 cards` → total + count) and then calls `🔧 compute` to
+divide them — answering **$288.31**, tool-grounded, without doing the math itself
+and without telling you to calculate it. The deterministic verifier still guards
+every figure; the number is grounded because a tool produced it.
 
 ## 3 · Memory — record a durable note
 
