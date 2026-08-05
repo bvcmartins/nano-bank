@@ -94,13 +94,20 @@ echo "🏦 Deploying bank-api..."
 kubectl apply -f bank-api-deployment.yaml
 kubectl -n nano-bank rollout status deploy/bank-api --timeout=180s
 
-echo "🐳 Building + loading nano-bank-ui image..."
-docker build -t nano-bank-ui:dev ../ui
-kind load docker-image nano-bank-ui:dev --name nano-bank
+# The web UI is optional for backend/agent workflows (e.g. the COO demo, which
+# never touches :3000). SKIP_UI=1 skips building/deploying it so an unrelated UI
+# build break can't abort a bank+agent bring-up.
+if [ "${SKIP_UI:-0}" = "1" ]; then
+  echo "⏭️  SKIP_UI=1 — skipping nano-bank-ui build/deploy."
+else
+  echo "🐳 Building + loading nano-bank-ui image..."
+  docker build -t nano-bank-ui:dev ../ui
+  kind load docker-image nano-bank-ui:dev --name nano-bank
 
-echo "🖥️  Deploying nano-bank-ui..."
-kubectl apply -f ui-deployment.yaml
-kubectl -n nano-bank rollout status deploy/nano-bank-ui --timeout=180s
+  echo "🖥️  Deploying nano-bank-ui..."
+  kubectl apply -f ui-deployment.yaml
+  kubectl -n nano-bank rollout status deploy/nano-bank-ui --timeout=180s
+fi
 
 echo "🎉 Nano Bank PostgreSQL deployment complete!"
 echo ""

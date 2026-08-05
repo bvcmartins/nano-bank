@@ -59,7 +59,9 @@ fi
 
 if [ "$DO_UP" = "1" ]; then
   echo "🚀 bringing up the stack (modern core + bank + agent, then the COO) ..."
-  ./scripts/deploy-all.sh
+  # The COO demo never touches the web UI (:3000); skip it so an unrelated UI
+  # build break can't abort the bank+agent bring-up.
+  SKIP_UI=1 ./scripts/deploy-all.sh
   ./coo/k8s/deploy.sh
 fi
 
@@ -78,12 +80,13 @@ if [ "$DO_SEED" = "1" ]; then
     testing/seed-demo.sh
 fi
 
-# Drive the narrated arc from the coo venv (httpx).
-VENV="coo/.venv"
+# Drive the narrated arc. The driver only speaks HTTP to the COO, so it needs
+# just httpx — a tiny venv, not the COO's full (torch/fastembed) requirements.
+VENV="coo/demo/.venv"
 if [ ! -x "$VENV/bin/python" ]; then
-  echo "🐍 creating coo venv ($VENV) via uv ..."
+  echo "🐍 creating demo venv ($VENV) via uv ..."
   uv venv "$VENV" >/dev/null
-  uv pip install --python "$VENV/bin/python" -r coo/requirements.txt >/dev/null
+  uv pip install --python "$VENV/bin/python" httpx >/dev/null
 fi
 
 echo "🎬 running the narrated COO demo ..."

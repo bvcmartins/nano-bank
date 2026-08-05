@@ -37,14 +37,16 @@ posts through). Bring-up leans on `scripts/deploy-all.sh` + `coo/k8s/deploy.sh`.
 
 ### Live console
 
-With the stack up (e.g. after `run-demo.sh --no-seed`, which leaves the
-port-forwards running for the session):
+`run-demo.sh` tears down its own port-forwards when it exits, so for the live
+console open a forward yourself (the stack stays up in-cluster):
 
 ```bash
+kubectl -n nano-bank port-forward svc/coo 8093:8093 &
 COO_API_URL=http://localhost:8093 streamlit run coo/console.py   # :8501
 ```
 
-Then type the beats below.
+Then type the beats below and watch the answer, the grounding badge, and the
+expandable **harness trace** panel update per turn.
 
 ## The arc — what each beat proves
 

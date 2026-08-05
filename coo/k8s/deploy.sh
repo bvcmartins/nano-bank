@@ -24,7 +24,10 @@ kind load docker-image nano-operations-mcp:dev nano-coo:dev --name nano-bank
 # operations MCP now fails loudly if it is unset (config.py), so it MUST live in
 # the secret. Sourced from .env if present, else the repo's dev default (matches
 # bank-api's built-in default — rotate both for a real deployment).
-SERVICE_CLIENT_SECRET=$(grep -E '^SERVICE_CLIENT_SECRET=' .env 2>/dev/null | cut -d= -f2-)
+# `|| true`: grep exits 1 when .env has no SERVICE_CLIENT_SECRET line, and under
+# `set -euo pipefail` that would abort the script — the default below is exactly
+# the fallback we want in that case.
+SERVICE_CLIENT_SECRET=$(grep -E '^SERVICE_CLIENT_SECRET=' .env 2>/dev/null | cut -d= -f2- || true)
 : "${SERVICE_CLIENT_SECRET:=nano-bank-visa-network-secret-change-me}"
 
 if ! kubectl --context "$CTX" -n nano-bank get secret nano-agent-secrets >/dev/null 2>&1; then
