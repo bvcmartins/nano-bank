@@ -152,7 +152,12 @@ def revise_prompt(figures: list[str], claims: list[str] = ()) -> str:
             f"{', '.join(claims)}. Correct each — call the tool that settles "
             "it, or state plainly you cannot see it — and never assert a window "
             "is unavailable if a tool returned data for it.")
-    parts.append("Then give the corrected answer.")
+    parts.append(
+        "Then RESTATE YOUR ENTIRE ANSWER IN FULL with the corrections applied — "
+        "reproduce the whole report, every section and figure, as a single "
+        "self-contained reply. Do NOT send only the changed lines, a diff, or a "
+        "note about what you fixed; the reader sees only this message, not your "
+        "previous one, so it must stand completely on its own.")
     return " ".join(parts)
 
 
