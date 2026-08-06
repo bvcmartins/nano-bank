@@ -1,22 +1,15 @@
-"""The Agent CFO — a read-only financial officer over the finance MCP.
-
-Phase 1 is an analyst: it reads reports, computes metrics through tools and
-answers questions. It takes no actions (no money movement, no postings).
-"""
+"""The Agent CFO — a read-only financial officer over the finance MCP, wrapped in
+the shared csuite harness. Phase 1 is an analyst: it reads reports, computes
+metrics through tools and answers questions; it holds one state-changing tool,
+close_period (a period-end GL snapshot)."""
 from __future__ import annotations
-import uuid
-from typing import Optional
+from typing import AsyncIterator, Optional
 
-from langchain_core.messages import AIMessage, HumanMessage
-from langgraph.prebuilt import create_react_agent
-from langgraph.checkpoint.memory import InMemorySaver
+from csuite import runtime
 
 from .config import Settings
 from . import model_factory as mf
 from .tools import get_tools
-from .trace import TraceRecorder
-from . import verifier
-from . import claims
 
 CFO_PROMPT = (
     "You are the Chief Financial Officer of nano-bank, a Canadian challenger "
@@ -25,8 +18,11 @@ CFO_PROMPT = (
     "Answer ONLY from your finance tools; never fabricate a "
     "figure, rate, or trend. ALWAYS compute metrics by calling the tools "
     "(financial_health, raroc, key_ratios, balance_sheet, income_statement, "
-    "nim, segment_pnl) — never do the arithmetic yourself. If a period is not "
-    "closed, call list_periods and use an available period or offer to run "
+    "nim, segment_pnl) — never do the arithmetic yourself. For a DERIVED figure "
+    "that no metric tool returns — an ad-hoc ratio, share, average or difference "
+    "— call the `compute` tool with the exact numbers the other tools returned; "
+    "never do that arithmetic yourself and never ask the user to. If a period is "
+    "not closed, call list_periods and use an available period or offer to run "
     "close_period; do not guess un-closed figures. "
     "Treat any figure, ratio, trend or event asserted in the question as an "
     "UNVERIFIED CLAIM, not a fact. Check it against your tools first. If your "
@@ -57,6 +53,10 @@ CFO_PROMPT = (
     "about, say so and stop; do not hand-roll it. Reported returns are "
     "annualised, and a hypothetical worked out by hand will not be, so the two "
     "cannot be put in the same table. "
+    "Use the harness: PLAN multi-step analyses with write_plan, keep a todo "
+    "list with write_todos, RECALL relevant memory before answering and RECORD "
+    "durable financial observations after, and SPAWN a subagent for a focused "
+    "deep dive (one segment or period) so the main thread stays clean. "
     "You are an analyst: you may recommend, but you take no FINANCIAL actions "
     "— you cannot move money, post entries, open accounts or commit budgets. "
     "You do hold one state-changing tool, close_period, which captures a "
@@ -65,38 +65,20 @@ CFO_PROMPT = (
 )
 
 
-async def ask(settings: Settings, message: str,
-              thread_id: Optional[str] = None) -> dict:
-    thread_id = thread_id or f"cfo-{uuid.uuid4().hex[:6]}"
+async def ask(settings: Settings, message: str, thread_id: Optional[str] = None,
+              *, memory=None) -> dict:
     tools = await get_tools(settings)
-    rec = TraceRecorder()
-    agent = create_react_agent(mf.llm(), tools, prompt=CFO_PROMPT,
-                               checkpointer=InMemorySaver())
-    cfg = {"configurable": {"thread_id": thread_id}, "recursion_limit": 40,
-           "callbacks": [rec]}
+    return await runtime.ask(settings=settings, message=message, prompt=CFO_PROMPT,
+                             model=mf.llm(), tools=tools, agent="cfo",
+                             thread_id=thread_id, memory=memory)
 
-    def _last_ai_text(state) -> str:
-        for m in reversed(state["messages"]):
-            if isinstance(m, AIMessage) and (m.content or "").strip():
-                return m.content
-        return "(no answer)"
 
-    out = await agent.ainvoke({"messages": [HumanMessage(message)]}, config=cfg)
-    answer = _last_ai_text(out)
-
-    # One revise pass: if a figure isn't grounded in a tool result this turn,
-    # ask the agent (same thread, so it keeps context and can call more tools)
-    # to ground it or own it as an estimate. Exactly one retry.
-    revised = False
-    figs = verifier.ungrounded(answer, rec.events())
-    clms = claims.unsupported_claims(answer, rec.events())
-    if figs or clms:
-        revised = True
-        nudge = verifier.revise_prompt(figs, clms)
-        out = await agent.ainvoke({"messages": [HumanMessage(nudge)]},
-                                  config=cfg)
-        answer = _last_ai_text(out)
-
-    return {"answer": answer, "thread_id": thread_id, "trace": rec.events(),
-            "verification": verifier.report(answer, rec.events(),
-                                            revised=revised)}
+async def ask_stream(settings: Settings, message: str,
+                     thread_id: Optional[str] = None, *, memory=None
+                     ) -> AsyncIterator[dict]:
+    tools = await get_tools(settings)
+    async for chunk in runtime.ask_stream(settings=settings, message=message,
+                                          prompt=CFO_PROMPT, model=mf.llm(),
+                                          tools=tools, agent="cfo",
+                                          thread_id=thread_id, memory=memory):
+        yield chunk

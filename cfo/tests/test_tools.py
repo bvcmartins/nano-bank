@@ -13,7 +13,7 @@ def test_mcp_client_targets_finance_mcp():
 
 
 def test_trace_recorder_records_tool_events():
-    from cfo.trace import TraceRecorder
+    from csuite.trace import TraceRecorder
     rec = TraceRecorder()
     rec.on_tool_start({"name": "raroc"}, "2026-07", run_id="r1")
     rec.on_tool_end("{...}", run_id="r1")

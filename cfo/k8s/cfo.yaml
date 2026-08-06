@@ -20,8 +20,21 @@ spec:
         env:
         - { name: FINANCE_MCP_URL, value: http://finance-mcp:8088/mcp }
         - { name: OLLAMA_BASE_URL, value: https://ollama.com/v1 }
-        - { name: CFO_MODEL,       value: glm-5.2 }
+        # Kimi is the main model (kimi-k2.6, included plan); kimi-k3 is paid.
+        - { name: CFO_MODEL,       value: kimi-k2.6 }
         - { name: API_PORT,        value: "8089" }
+        # Durable memory is best-effort: if this Qdrant is absent the CFO still
+        # answers from live tools (SafeMemory degrades to no-op).
+        - { name: QDRANT_URL,      value: http://agent-qdrant:6333 }
+        - { name: MEMORY_NAMESPACE, value: cfo }
+        livenessProbe:
+          httpGet: { path: /livez, port: 8089 }
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet: { path: /health, port: 8089 }
+          initialDelaySeconds: 5
+          periodSeconds: 20
 ---
 apiVersion: v1
 kind: Service

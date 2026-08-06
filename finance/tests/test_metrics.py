@@ -240,3 +240,14 @@ def test_provision_scenario_can_turn_returns_negative():
                                      provision=D("400"))
     assert out["net_income_after"] == D("-300")
     assert out["roa_after"] < 0
+
+
+def test_compute_derived_figures():
+    # cost/income ratio, a share, an average — the derived figures the metric
+    # tools don't expose, computed deterministically so they stay grounded.
+    assert metrics.compute("ratio", [4500, 10000])["result"] == D("0.4500")
+    assert metrics.compute("percent", [4500, 10000])["result"] == D("45.00")
+    assert metrics.compute("mean", [10, 20, 30])["result"] == D("20.00")
+    assert metrics.compute("difference", [1000, 250])["result"] == D("750.00")
+    assert "error" in metrics.compute("ratio", [5, 0])       # zero denominator
+    assert "error" in metrics.compute("bogus", [1, 2])       # unknown op

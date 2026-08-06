@@ -13,6 +13,48 @@ def _safe_div(n: Decimal, d: Decimal):
     return n / d if d else None
 
 
+def _dec(v) -> Decimal:
+    return Decimal(str(v)) if v is not None else Decimal(0)
+
+
+def compute(operation: str, values) -> dict:
+    """Deterministic arithmetic over numbers the other tools already returned, so
+    a *derived* figure (a ratio, share, average, difference) the metric tools do
+    not expose stays tool-grounded instead of the model doing the math itself.
+
+    operation: mean | sum | ratio | percent | difference | product.
+    Returns {operation, inputs, result} or {error, …} — never raises."""
+    op = (operation or "").strip().lower()
+    nums = [_dec(v) for v in (values or [])]
+    two_ok = len(nums) >= 2 and nums[1] != 0
+
+    if op in ("mean", "average", "avg"):
+        result = (sum(nums) / len(nums)) if nums else None
+    elif op == "sum":
+        result = sum(nums) if nums else Decimal(0)
+    elif op in ("ratio", "divide"):
+        result = (nums[0] / nums[1]) if two_ok else None
+    elif op in ("percent", "percentage", "share"):
+        result = (nums[0] / nums[1] * 100) if two_ok else None
+    elif op in ("difference", "subtract"):
+        result = (nums[0] - sum(nums[1:])) if nums else None
+    elif op in ("product", "multiply"):
+        result = Decimal(1)
+        for n in nums:
+            result *= n
+        if not nums:
+            result = None
+    else:
+        return {"error": f"unknown operation '{operation}' "
+                "(use mean|sum|ratio|percent|difference|product)"}
+
+    if result is None:
+        return {"error": "need valid operands — ratio/percent want two numbers "
+                "with a non-zero denominator", "operation": op, "inputs": nums}
+    places = Decimal("0.0001") if op in ("ratio", "divide") else Decimal("0.01")
+    return {"operation": op, "inputs": nums, "result": result.quantize(places)}
+
+
 def economic_capital(snapshot: dict, risk: RiskConfig) -> dict:
     """Risk-weight EVERY asset on the balance sheet.
 

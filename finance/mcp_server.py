@@ -124,6 +124,17 @@ def build_mcp(deps: Deps) -> FastMCP:
             days, RiskConfig.from_env()))
 
     @mcp.tool()
+    def compute(operation: str, values: list[float]) -> dict:
+        """Deterministic arithmetic on numbers you already got from other tools,
+        so a derived figure stays tool-grounded — use this instead of doing math
+        yourself, and never tell the user to calculate it.
+
+        operation: mean | sum | ratio | percent | difference | product.
+        values: the exact tool-returned numbers, in order (e.g. cost/income ratio
+        → ratio, values=[operating_expense, operating_income])."""
+        return _stringify(metrics.compute(operation, values))
+
+    @mcp.tool()
     def financial_health(period: str) -> dict:
         """Full financial-health bundle: balance sheet, income statement, NIM,
         key ratios and RAROC for a period."""
