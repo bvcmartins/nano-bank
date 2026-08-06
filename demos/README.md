@@ -11,12 +11,14 @@ per subdirectory.
 | 2 | Activity simulator | `02-simulator/` | Auto-generate customers, accounts (all types), and transactions of every type **including deliberate failures**; register Interac payees + send over the real rail; a final **timestamped event-log** tab streams every API call (green/red). |
 | 3 | Manager chat | `03-manager-chat/` | The personal manager as a **left-right conversation** (you ← → manager) with the run trace inline; five pre-filled boxes incl. **account balance** and **savings-account advice**. Branch API (`:8086`). |
 | 4 | External mandated agent | `04-external-agent/` | An **autonomous LLM agent** operating a customer's bank **only through the agentic branch** (`/agent-gateway/*`), under a customer-granted **mandate** (scoped, capped, revocable): a high-level instruction → plan → mandate-gated acts (bill payment to Epcor) + A2A to the manager, with a Revoke button. |
-| 5 | Agent COO | `05-coo/` | The **Chief Operating Officer** agent (read-only operational analyst): a narrated 7-beat arc — grounded operational review with planning + a subagent rail deep-dive, the verifier catching an ungrounded figure, durable memory recalled in a fresh thread, scope refusals, and a caveated float. Ships a one-command in-cluster runner + a live console. See `05-coo/README.md`. |
+| 5 | Agent COO | `05-coo/` | The **Chief Operating Officer** agent (read-only operational analyst): a narrated 7-beat arc — grounded operational review with planning + a subagent rail deep-dive, a derived figure via the compute tool, durable memory recalled in a fresh thread, scope refusals, and a caveated float. Ships a one-command in-cluster runner + a live console. See `05-coo/README.md`. |
+| 6 | Agent CFO | `06-cfo/` | The **Chief Financial Officer** agent (read-only financial analyst on the same `csuite` harness): a 7-beat arc — grounded period review with planning + a subagent segment deep-dive, a cost-to-income ratio via compute, durable memory, refusing an unverifiable NPL premise, scope discipline (operations are the COO's), and period discipline (no fabricated quarter). One-command runner + live console. See `06-cfo/README.md`. |
 
 _More demos ahead (each gets its own numbered `demos/NN-<name>/`)._
 
-Demo 5 is a different shape from 1–4: not a single `app.py` over the bank API but
-a narrated `/ask` driver (`05-coo/run-demo.sh` → `drive.py`) plus the COO console
+Demos 5–6 are a different shape from 1–4: not a single `app.py` over the bank API
+but a narrated `/ask` driver (`NN-<agent>/run-demo.sh` → `drive.py`, sharing
+`demos/_driver.py`) plus the agent console
 (`coo/console.py`). Its README carries the full runbook and question sheet.
 
 Demos are independent Streamlit apps — run several at once on different ports
