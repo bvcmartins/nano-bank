@@ -16,6 +16,14 @@ from coo.trace_view import extract_highlights, to_steps  # noqa: E402
 
 API = os.environ.get("COO_API_URL", "http://localhost:8093")
 
+
+def esc(text: str) -> str:
+    """Escape '$' so Streamlit doesn't render '$…$' spans as LaTeX math — which
+    mangles dollar amounts (spaces stripped, '**'→'∗∗', '-'→'−'). Model answers
+    are full of $ figures, so any markdown we render must go through this."""
+    return (text or "").replace("$", "\\$")
+
+
 st.set_page_config(page_title="nano-bank COO", page_icon="🏭")
 st.title("nano-bank — Agent COO")
 
@@ -26,7 +34,7 @@ if "history" not in st.session_state:
 
 for role, text in st.session_state.history:
     with st.chat_message(role):
-        st.markdown(text)
+        st.markdown(esc(text))
 
 
 def _live_line(step: dict) -> str:
@@ -36,7 +44,7 @@ def _live_line(step: dict) -> str:
         s += f"  ·  `{step['timing']}`"
     if step["subtitle"]:
         s += f"  —  {step['subtitle']}"
-    return s
+    return esc(s)
 
 
 def render_run_tree(trace: list[dict], veri: dict | None) -> None:
@@ -54,15 +62,15 @@ def render_run_tree(trace: list[dict], veri: dict | None) -> None:
                 head += f"  ·  `{step['timing']}`"
             if step["subtitle"]:
                 head += f"  ·  {step['subtitle']}"
-            st.markdown(head)
+            st.markdown(esc(head))
             for label, text in step["body"].items():
                 st.caption(label)
-                st.code(text, language=None)
+                st.code(text, language=None)   # st.code is literal — no $ escaping
         if veri:
-            st.markdown(
+            st.markdown(esc(
                 f"---\n**verification** — grounded {veri.get('grounded', [])} · "
                 f"ungrounded {veri.get('ungrounded', [])} · "
-                f"revised {veri.get('revised', False)}")
+                f"revised {veri.get('revised', False)}"))
         with st.expander("raw trace (json)"):
             st.json(trace, expanded=False)
 
@@ -110,7 +118,7 @@ if prompt := st.chat_input("Ask the COO about how the bank is running…"):
         except Exception as e:  # noqa: BLE001
             answer = f"⚠️ COO unreachable: {e}"
 
-        st.markdown(answer)
+        st.markdown(esc(answer))
         if veri is not None:
             line = badge(veri)
             (st.warning if (veri.get("ungrounded") or veri.get("unsupported_claims"))

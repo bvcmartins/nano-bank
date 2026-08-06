@@ -25,12 +25,19 @@ DB_PORT="${DB_PORT:-5432}"
 # Must match the API's security.service_client_secret (config/default.toml).
 SERVICE_CLIENT_SECRET="${SERVICE_CLIENT_SECRET:-nano-bank-visa-network-secret-change-me}"
 
-# How much to seed — small and deterministic by default.
-CUSTOMERS="${CUSTOMERS:-8}"        # customers (each opens a credit-card account)
-VISA_CYCLES="${VISA_CYCLES:-40}"   # card purchases (auth -> capture -> settle)
-INTERAC_CYCLES="${INTERAC_CYCLES:-20}"
-AFT_CYCLES="${AFT_CYCLES:-0}"      # off by default (float/txn/cards already move)
+# How much to seed — a realistic-ish spread by default (all overridable).
+CUSTOMERS="${CUSTOMERS:-25}"        # customers (each opens a credit-card account)
+VISA_CYCLES="${VISA_CYCLES:-200}"   # card purchases (auth -> capture -> settle)
+INTERAC_CYCLES="${INTERAC_CYCLES:-80}"
+AFT_CYCLES="${AFT_CYCLES:-0}"       # off by default (float/txn/cards already move)
 LYNX_CYCLES="${LYNX_CYCLES:-0}"
+
+# Per-rail amount ranges — realistic magnitudes (retail cards, Interac e-Transfers,
+# batch AFT, high-value Lynx wires). Each simulator reads MIN_AMOUNT/MAX_AMOUNT.
+VISA_MIN="${VISA_MIN:-15}";        VISA_MAX="${VISA_MAX:-2500}"
+INTERAC_MIN="${INTERAC_MIN:-50}";  INTERAC_MAX="${INTERAC_MAX:-6000}"
+AFT_MIN="${AFT_MIN:-750}";         AFT_MAX="${AFT_MAX:-25000}"
+LYNX_MIN="${LYNX_MIN:-25000}";     LYNX_MAX="${LYNX_MAX:-2000000}"
 
 VENV="${SEED_VENV:-.venv}"
 if [ ! -x "$VENV/bin/python" ]; then
@@ -55,6 +62,7 @@ run "💳 $VISA_CYCLES card purchases (auth→capture→settle every cycle)" \
   env API_BASE_URL="$API_BASE_URL" DB_HOST="$DB_HOST" DB_PORT="$DB_PORT" \
       SERVICE_CLIENT_SECRET="$SERVICE_CLIENT_SECRET" \
       MAX_CYCLES="$VISA_CYCLES" INTERVAL_SECONDS=0 SETTLE_INTERVAL_SECONDS=0 \
+      MIN_AMOUNT="$VISA_MIN" MAX_AMOUNT="$VISA_MAX" \
       "$PY" visa/visa_simulator.py
 
 if [ "${INTERAC_CYCLES}" -gt 0 ]; then
@@ -62,6 +70,7 @@ if [ "${INTERAC_CYCLES}" -gt 0 ]; then
     env API_BASE_URL="$API_BASE_URL" DB_HOST="$DB_HOST" DB_PORT="$DB_PORT" \
         SERVICE_CLIENT_SECRET="$SERVICE_CLIENT_SECRET" \
         MAX_CYCLES="$INTERAC_CYCLES" INTERVAL_SECONDS=0 INBOUND_PROB=1.0 \
+        MIN_AMOUNT="$INTERAC_MIN" MAX_AMOUNT="$INTERAC_MAX" \
         "$PY" interac/interac_simulator.py
 fi
 
@@ -70,6 +79,7 @@ if [ "${AFT_CYCLES}" -gt 0 ]; then
     env API_BASE_URL="$API_BASE_URL" DB_HOST="$DB_HOST" DB_PORT="$DB_PORT" \
         SERVICE_CLIENT_SECRET="$SERVICE_CLIENT_SECRET" \
         MAX_CYCLES="$AFT_CYCLES" INTERVAL_SECONDS=0 INBOUND_PROB=1.0 \
+        MIN_AMOUNT="$AFT_MIN" MAX_AMOUNT="$AFT_MAX" \
         "$PY" aft/aft_simulator.py
 fi
 
@@ -78,6 +88,7 @@ if [ "${LYNX_CYCLES}" -gt 0 ]; then
     env API_BASE_URL="$API_BASE_URL" DB_HOST="$DB_HOST" DB_PORT="$DB_PORT" \
         SERVICE_CLIENT_SECRET="$SERVICE_CLIENT_SECRET" \
         MAX_CYCLES="$LYNX_CYCLES" INTERVAL_SECONDS=0 INBOUND_PROB=1.0 \
+        MIN_AMOUNT="$LYNX_MIN" MAX_AMOUNT="$LYNX_MAX" \
         "$PY" lynx/lynx_simulator.py
 fi
 

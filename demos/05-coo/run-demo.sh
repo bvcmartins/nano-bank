@@ -75,8 +75,9 @@ wait_http http://localhost:8093/livez  "coo"
 
 if [ "$DO_SEED" = "1" ]; then
   echo "🌱 seeding demo activity (bounded, terminating — demo/test-only) ..."
-  # A little of every rail so 'rail activity by status' has something to say.
-  INTERAC_CYCLES=20 AFT_CYCLES=8 LYNX_CYCLES=6 VISA_CYCLES=40 CUSTOMERS=8 \
+  # Realistic-ish volume across every rail (rail-appropriate amounts live in
+  # seed-demo.sh). Override any of these on the command line for more.
+  CUSTOMERS=25 VISA_CYCLES=200 INTERAC_CYCLES=80 AFT_CYCLES=30 LYNX_CYCLES=15 \
     testing/seed-demo.sh
 fi
 
