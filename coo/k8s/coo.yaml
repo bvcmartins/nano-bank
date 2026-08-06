@@ -20,7 +20,10 @@ spec:
         env:
         - { name: OPERATIONS_MCP_URL, value: http://operations-mcp:8092/mcp }
         - { name: OLLAMA_BASE_URL,    value: https://ollama.com/v1 }
-        - { name: COO_MODEL,          value: glm-5.2 }
+        # Kimi is the main model. kimi-k2.6 runs on the included plan; kimi-k3 is
+        # an extra-usage (paid) model — switch COO_MODEL to kimi-k3 once ollama
+        # extra-usage credits are enabled (ollama.com/settings).
+        - { name: COO_MODEL,          value: kimi-k2.6 }
         - { name: API_PORT,           value: "8093" }
         # Durable memory is best-effort: if this Qdrant is absent the agent still
         # answers from live tools (SafeMemory degrades to no-op).
