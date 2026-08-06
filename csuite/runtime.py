@@ -26,11 +26,23 @@ from .harness.memory import HarnessMemory, SafeMemory
 _CHECKPOINTER = InMemorySaver()
 
 
+_NO_ANSWER = "(no answer)"
+
+_SYNTH_NUDGE = (
+    "Give your final written answer now: summarize the figures you gathered from "
+    "the tools this turn — grounded, with the period/window named. Do not call any "
+    "more tools; just write the answer.")
+
+
 def _last_ai_text(state) -> str:
     for m in reversed(state["messages"]):
         if isinstance(m, AIMessage) and (m.content or "").strip():
             return m.content
-    return "(no answer)"
+    return _NO_ANSWER
+
+
+def _empty(answer: str) -> bool:
+    return not answer or answer.strip() in ("", _NO_ANSWER)
 
 
 def default_memory(settings):
@@ -64,6 +76,9 @@ async def ask(*, settings, message: str, prompt: str, model, tools, agent: str,
             "running_summary": "", "depth": 0}
     out = await react.ainvoke(init, config=cfg)
     answer = _last_ai_text(out)
+    if _empty(answer):   # model ended on an empty turn after tool work — synthesise
+        out = await react.ainvoke({"messages": [HumanMessage(_SYNTH_NUDGE)]}, config=cfg)
+        answer = _last_ai_text(out)
 
     revised = False
     figs = verifier.ungrounded(answer, rec.events())
@@ -115,6 +130,11 @@ async def ask_stream(*, settings, message: str, prompt: str, model, tools, agent
         async for chunk in _pump(t1):
             yield chunk
         answer = _last_ai_text(t1.result())
+        if _empty(answer):   # empty final turn — nudge once to synthesise
+            ts = _spawn({"messages": [HumanMessage(_SYNTH_NUDGE)]})
+            async for chunk in _pump(ts):
+                yield chunk
+            answer = _last_ai_text(ts.result())
 
         revised = False
         figs = verifier.ungrounded(answer, rec.events())
