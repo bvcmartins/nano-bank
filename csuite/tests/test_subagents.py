@@ -1,10 +1,10 @@
 import asyncio
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import InMemorySaver
-from coo.harness.state import HarnessState
-from coo.harness.events import HarnessLog
-from coo.harness.subagents import make_spawn_tool
-from coo.tests.fakes import FakeChatModel, fake_ops_tools
+from csuite.harness.state import HarnessState
+from csuite.harness.events import HarnessLog
+from csuite.harness.subagents import make_spawn_tool
+from csuite.tests.fakes import FakeChatModel, fake_ops_tools
 
 
 def _build_agent(tool_subset, depth):

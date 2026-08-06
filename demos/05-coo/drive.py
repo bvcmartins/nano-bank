@@ -20,10 +20,10 @@ import textwrap
 
 import httpx
 
-# demos/05-coo/drive.py -> repo root, so the pure `coo.trace_view` helper imports
+# demos/05-coo/drive.py -> repo root, so the pure `csuite.trace_view` helper imports
 # even when this script is run standalone (it pulls in no heavy deps).
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from coo.trace_view import extract_highlights  # noqa: E402
+from csuite.trace_view import extract_highlights  # noqa: E402
 
 API = os.environ.get("COO_API_URL", "http://localhost:8093")
 

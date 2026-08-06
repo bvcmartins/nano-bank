@@ -13,7 +13,7 @@ expander (plan / todos / subagent / memory chips). These are the same prompts
 ## 1 · Grounded review + planning + subagent
 
 ```
-Give me an operational health review over the last 30 days — float, transaction volumes, rail activity by status, and any exceptions, with the numbers. Do a focused subagent deep-dive on whichever rail carried the most activity and fold its finding into your summary.
+/
 ```
 
 Watch for: `🗺️ planned · ✅ todos · 🔧 tools · 🧵 subagent` in the trace chips,

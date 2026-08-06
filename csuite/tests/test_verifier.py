@@ -1,5 +1,5 @@
 from decimal import Decimal as D
-from coo import verifier
+from csuite import verifier
 
 
 def test_grounded_values_parses_numbers_from_tool_outputs():

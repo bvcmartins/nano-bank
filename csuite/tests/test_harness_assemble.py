@@ -1,8 +1,8 @@
 import uuid
 from langchain_core.messages import HumanMessage
-from coo.harness import assemble
-from coo.harness.memory import SafeMemory
-from coo.tests.fakes import FakeChatModel, fake_ops_tools
+from csuite.harness import assemble
+from csuite.harness.memory import SafeMemory
+from csuite.tests.fakes import FakeChatModel, fake_ops_tools
 
 
 def test_assembled_agent_runs_plan_then_tool_then_answers():

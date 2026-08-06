@@ -1,7 +1,7 @@
 import pytest
 from langchain_core.messages import ToolMessage
-from coo.harness.planning import planning_tools
-from coo.harness.todos import todo_tools
+from csuite.harness.planning import planning_tools
+from csuite.harness.todos import todo_tools
 
 
 def _by_name(tools):

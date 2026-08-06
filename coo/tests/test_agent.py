@@ -2,8 +2,8 @@ import asyncio
 
 from coo import agent as agent_mod
 from coo.config import Settings
-from coo.harness.memory import SafeMemory
-from coo.tests.fakes import FakeChatModel, fake_ops_tools
+from csuite.harness.memory import SafeMemory
+from csuite.tests.fakes import FakeChatModel, fake_ops_tools
 
 
 def _settings():

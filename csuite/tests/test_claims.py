@@ -1,4 +1,4 @@
-from coo.claims import unsupported_claims, grounded_windows
+from csuite.claims import unsupported_claims, grounded_windows
 
 
 def _tool(name, inp, out):

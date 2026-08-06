@@ -1,4 +1,4 @@
-from coo.harness.memory import HarnessMemory, SafeMemory
+from csuite.harness.memory import HarnessMemory, SafeMemory
 
 
 def test_record_then_recall_by_semantic_query():
@@ -11,7 +11,7 @@ def test_record_then_recall_by_semantic_query():
 
 def test_namespace_isolates_agents():
     from qdrant_client import QdrantClient
-    from coo.harness.memory import _embedder
+    from csuite.harness.memory import _embedder
     client = QdrantClient(":memory:")
     embed = _embedder()
     coo = HarnessMemory(client, "shared", embed, namespace="coo")

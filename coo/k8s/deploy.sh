@@ -17,7 +17,8 @@ CTX=kind-nano-bank
 
 echo "🐳 Building + loading images..."
 docker build -t nano-operations-mcp:dev operations
-docker build -t nano-coo:dev            coo
+# coo image bundles the shared csuite package, so build from the repo root.
+docker build -f coo/Dockerfile -t nano-coo:dev .
 kind load docker-image nano-operations-mcp:dev nano-coo:dev --name nano-bank
 
 # The service secret is a shared credential with the bank's service plane; the

@@ -1,5 +1,5 @@
 from langchain_core.messages import HumanMessage, AIMessage
-from coo.harness.context import estimate_tokens, compact
+from csuite.harness.context import estimate_tokens, compact
 
 
 def _big(n):
