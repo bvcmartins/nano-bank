@@ -38,6 +38,11 @@ class BankClient:
         r.raise_for_status()
         return r.json()
 
+    def _post(self, path: str) -> dict:
+        r = self._http.post(path, headers={"authorization": f"Bearer {self._bearer()}"})
+        r.raise_for_status()
+        return r.json()
+
     def float_(self) -> dict:
         return self._get("/api/v1/back-office/ops/float")
 
@@ -52,3 +57,19 @@ class BankClient:
 
     def cards(self, window: str = "24h") -> dict:
         return self._get("/api/v1/back-office/ops/cards", {"window": window})
+
+    # --- Autonomous operational levers (self-verifying + audited server-side) ---
+    # Each returns {"outcome": "executed"|"refused", ...}. The bank re-checks a
+    # deterministic precondition and writes the attempt to the tamper-evident
+    # agent-action ledger; the COO cannot bypass or suppress either.
+    def cut_aft_batch(self) -> dict:
+        return self._post("/api/v1/ops-levers/cut-aft-batch")
+
+    def sweep_expired_etransfers(self) -> dict:
+        return self._post("/api/v1/ops-levers/sweep-expired-etransfers")
+
+    def reject_stale_wires(self) -> dict:
+        return self._post("/api/v1/ops-levers/reject-stale-wires")
+
+    def flush_notifications(self) -> dict:
+        return self._post("/api/v1/ops-levers/flush-notifications")

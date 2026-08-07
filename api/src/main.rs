@@ -203,6 +203,10 @@ async fn create_router(pool: config::database::DatabasePool, settings: &Settings
         .nest("/api/v1/interac", handlers::interac::interac_routes())
         .nest("/api/v1/aft", handlers::aft::aft_routes())
         .nest("/api/v1/lynx", handlers::lynx::lynx_routes())
+        .nest(
+            "/api/v1/ops-levers",
+            handlers::ops_levers::ops_lever_routes(),
+        )
         // Transaction routes
         .nest(
             "/api/v1/transactions",

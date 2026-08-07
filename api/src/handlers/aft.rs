@@ -562,6 +562,15 @@ async fn submit_batch(
     _svc: AuthenticatedService,
     Path(batch_id): Path<Uuid>,
 ) -> Result<Json<BatchResponse>, AppError> {
+    Ok(Json(submit_batch_inner(&state, batch_id).await?))
+}
+
+/// The batch cut itself (status check, CPA-005 emit, mark submitted), callable by
+/// the admin route above and the COO's `cut-aft-batch` lever (`ops_levers.rs`).
+pub(crate) async fn submit_batch_inner(
+    state: &AppState,
+    batch_id: Uuid,
+) -> Result<BatchResponse, AppError> {
     let mut tx = state.pool.begin().await?;
     let status: String =
         sqlx::query_scalar("SELECT status::text FROM aft_batches WHERE batch_id=$1 FOR UPDATE")
@@ -647,7 +656,7 @@ async fn submit_batch(
         .map_err(|e| AppError::Internal(format!("write CPA-005 file: {e}")))?;
 
     tracing::info!(%batch_id, entries = entry_count, file = %path, "📄 AFT batch submitted");
-    Ok(Json(load_batch(&state, batch_id).await?))
+    load_batch(state, batch_id).await
 }
 async fn list_entries(
     State(state): State<AppState>,

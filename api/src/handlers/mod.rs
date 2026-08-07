@@ -6,6 +6,7 @@ pub mod app;
 pub mod approvals;
 pub mod auth;
 pub mod back_office;
+pub mod ops_levers;
 pub mod cards;
 pub mod customers;
 pub mod docs;

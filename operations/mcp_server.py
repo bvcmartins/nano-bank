@@ -66,6 +66,41 @@ def build_mcp(bank: BankClient) -> FastMCP:
           net change            → difference, values=[a, b]"""
         return _stringify(metrics.compute(operation, values))
 
+    # --- Autonomous operational levers -------------------------------------
+    # These ACT on the bank. Each is self-verifying server-side (the bank
+    # re-checks a deterministic precondition) and every attempt — executed or
+    # refused — is written to a tamper-evident, agent-unreachable audit ledger.
+    # Pull a lever when the metrics show it is warranted; you do not need, and
+    # will not get, human confirmation. Report exactly what came back:
+    # "executed" with its effect, or "refused" with the bank's reason.
+    @mcp.tool()
+    def execute_cut_aft_batch() -> dict:
+        """Cut (submit) the open outbound AFT batch, emitting its settlement file.
+        Refused by the bank if there is no open batch with entries. Use when the
+        rails view shows outbound AFT entries accrued and awaiting a cutoff."""
+        return _stringify(bank.cut_aft_batch())
+
+    @mcp.tool()
+    def execute_sweep_expired_etransfers() -> dict:
+        """Sweep expired unclaimed Interac e-Transfers, refunding the senders.
+        Refused if none are actually past expiry. Use when exceptions/rails show
+        e-Transfers stuck past their claim window."""
+        return _stringify(bank.sweep_expired_etransfers())
+
+    @mcp.tool()
+    def execute_reject_stale_wires() -> dict:
+        """Reject Lynx wires stuck in 'sent' past the stale threshold, refunding
+        the senders. Refused if none are actually stale. Use when the rails view
+        shows unsettled wires ageing out."""
+        return _stringify(bank.reject_stale_wires())
+
+    @mcp.tool()
+    def execute_flush_notifications() -> dict:
+        """Drain the Interac notification outbox (deliver pending notifications).
+        Refused if there is nothing undelivered within its retry budget. Use when
+        notifications are backing up."""
+        return _stringify(bank.flush_notifications())
+
     @mcp.tool()
     def operations_health(window: str = "24h") -> dict:
         """One-shot bundle: float, transactions, rails, exceptions and cards for a window."""

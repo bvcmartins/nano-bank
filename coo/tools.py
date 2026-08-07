@@ -1,4 +1,5 @@
-"""The COO's domain tools: the operations MCP (bank-wide, read-only)."""
+"""The COO's domain tools: the operations MCP (bank-wide reads + autonomous,
+self-verifying, audited operational levers)."""
 from __future__ import annotations
 from .config import Settings
 
