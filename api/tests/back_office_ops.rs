@@ -346,7 +346,8 @@ async fn declines_rejects_a_customer_token() {
         .send()
         .await
         .unwrap();
-    assert_eq!(r.status(), 401);
+    assert_eq!(r.status().as_u16(), 403,
+        "customer token must be refused on the service plane");
 }
 
 #[tokio::test]
