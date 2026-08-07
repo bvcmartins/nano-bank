@@ -18,6 +18,11 @@ def esc(text: str) -> str:
     return (text or "").replace("$", "\\$")
 
 
+def _snip(text: str, n: int) -> str:
+    text = text or ""
+    return text if len(text) <= n else text[:n].rstrip() + " …"
+
+
 def _live_line(step: dict) -> str:
     s = f"{step['icon']} **{step['title']}**"
     if step["timing"]:
@@ -30,7 +35,7 @@ def _live_line(step: dict) -> str:
 def render_run_tree(trace: list[dict], veri: dict | None) -> None:
     """The full, expandable run tree: model reasoning, tool input→output, the
     subagent hand-off, memory, and the verifier's revise divider."""
-    with st.expander("🔎 run trace — reasoning & tool calls", expanded=False):
+    with st.expander("🔎 run trace — reasoning & tool calls", expanded=True):
         for step in to_steps(trace):
             if step["kind"] == "phase":
                 st.markdown(f"---\n#### {step['icon']} {step['title']}")
@@ -45,14 +50,18 @@ def render_run_tree(trace: list[dict], veri: dict | None) -> None:
             st.markdown(esc(head))
             for label, text in step["body"].items():
                 st.caption(label)
-                st.code(text, language=None)   # st.code is literal — no $ escaping
+                if label in ("says", "thinking"):
+                    # the model's own reasoning — render it readably, capped.
+                    st.markdown("> " + esc(_snip(text, 1200)).replace("\n", "\n> "))
+                else:
+                    st.code(_snip(text, 1200), language=None)  # literal — no $ escape
         if veri:
             st.markdown(esc(
                 f"---\n**verification** — grounded {veri.get('grounded', [])} · "
                 f"ungrounded {veri.get('ungrounded', [])} · "
                 f"revised {veri.get('revised', False)}"))
-        with st.expander("raw trace (json)"):
-            st.json(trace, expanded=False)
+        st.caption("raw trace (json)")
+        st.json(trace, expanded=False)
 
 
 def run_console(*, title: str, page_icon: str, api_url: str,
@@ -97,6 +106,11 @@ def run_console(*, title: str, page_icon: str, api_url: str,
                             for step in to_steps([ev]):
                                 live.update(label=f"{step['icon']} {step['title']}")
                                 live.write(_live_line(step))
+                                # show a sample of the model's actual reasoning
+                                # as it lands, not just the step title.
+                                says = step["body"].get("says") or step["body"].get("thinking")
+                                if step["kind"] == "model" and says:
+                                    live.markdown("> " + esc(_snip(says, 300)))
                         elif "final" in msg:
                             f = msg["final"]
                             answer = f.get("answer", "(no answer)")
