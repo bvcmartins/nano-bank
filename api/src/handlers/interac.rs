@@ -18,6 +18,7 @@ use validator::Validate;
 
 use crate::errors::AppError;
 use crate::handlers::cards::{fetch_account_for_update, normalize_amount};
+use crate::handlers::declines::{record_decline, DeclineEvent, DeclineReason};
 use crate::handlers::AppState;
 use crate::middleware::auth::{AuthenticatedCustomer, AuthenticatedService};
 use crate::models::interac::{
@@ -78,6 +79,19 @@ async fn send_etransfer(
     req.validate()?;
     let amount = normalize_amount(req.amount)?;
     if amount > max_amount(&state) {
+        record_decline(
+            &state.pool,
+            DeclineEvent {
+                channel: "interac_etransfer",
+                reason: DeclineReason::AmountExceedsMax,
+                account_id: Some(req.from_account_id),
+                customer_id: Some(caller.customer_id),
+                amount: Some(amount),
+                counterparty: Some(req.recipient_handle_value.clone()),
+                metadata: serde_json::json!({}),
+            },
+        )
+        .await;
         return Err(AppError::BadRequest(format!(
             "amount exceeds per-transfer max {}",
             max_amount(&state)
@@ -152,6 +166,19 @@ async fn send_etransfer(
         return Err(AppError::NotFound("account not found".into())); // 404, not 403
     }
     if amount > sender.available_balance {
+        record_decline(
+            &state.pool,
+            DeclineEvent {
+                channel: "interac_etransfer",
+                reason: DeclineReason::InsufficientFunds,
+                account_id: Some(sender.account_id),
+                customer_id: Some(sender.customer_id),
+                amount: Some(amount),
+                counterparty: Some(recipient_handle.clone()),
+                metadata: serde_json::json!({}),
+            },
+        )
+        .await;
         return Err(AppError::InsufficientFunds);
     }
 
@@ -1140,9 +1167,7 @@ async fn sweep_expired(
 
 /// The sweep itself, callable by the admin route above and the COO's
 /// `sweep-expired-etransfers` lever (`ops_levers.rs`).
-pub(crate) async fn sweep_expired_inner(
-    state: &AppState,
-) -> Result<serde_json::Value, AppError> {
+pub(crate) async fn sweep_expired_inner(state: &AppState) -> Result<serde_json::Value, AppError> {
     let rail = resolve_interac(state).await?;
     // Snapshot the due ids first (short read), then process each in its own tx so
     // one bad row can't roll back the batch.

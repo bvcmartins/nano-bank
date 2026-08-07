@@ -50,6 +50,7 @@ use crate::handlers::cards::{
     fetch_account_for_update, normalize_amount, post_gl_entry, post_two_legged, reference_number,
     Tx,
 };
+use crate::handlers::declines::{record_decline, DeclineEvent, DeclineReason};
 use crate::handlers::AppState;
 use crate::ledger::Account as GlAccount;
 use crate::middleware::auth::AuthenticatedCustomer;
@@ -286,12 +287,38 @@ async fn withdraw_money(
     ensure_operable(account)?;
 
     if account.available_balance < amount {
+        record_decline(
+            &state.pool,
+            DeclineEvent {
+                channel: "withdrawal",
+                reason: DeclineReason::InsufficientFunds,
+                account_id: Some(account.account_id),
+                customer_id: Some(auth.customer_id),
+                amount: Some(amount),
+                counterparty: None,
+                metadata: serde_json::json!({}),
+            },
+        )
+        .await;
         return Err(AppError::InsufficientFunds);
     }
 
     // Daily withdrawal limit.
     let limits = ensure_and_reset_limits(&mut tx, account.account_id).await?;
     if limits.daily_withdrawal_used + amount > limits.daily_withdrawal_limit {
+        record_decline(
+            &state.pool,
+            DeclineEvent {
+                channel: "withdrawal",
+                reason: DeclineReason::OverLimit,
+                account_id: Some(account.account_id),
+                customer_id: Some(auth.customer_id),
+                amount: Some(amount),
+                counterparty: None,
+                metadata: serde_json::json!({}),
+            },
+        )
+        .await;
         return Err(AppError::TransactionLimitExceeded);
     }
 

@@ -21,6 +21,7 @@ use crate::errors::AppError;
 use crate::handlers::cards::{
     fetch_account_for_update, normalize_amount, post_gl_entry, reference_number,
 };
+use crate::handlers::declines::{record_decline, DeclineEvent, DeclineReason};
 use crate::handlers::AppState;
 use crate::ledger::Account as GlAccount;
 use crate::middleware::auth::{AuthenticatedCustomer, AuthenticatedService};
@@ -361,6 +362,19 @@ async fn create_credit(
     req.validate()?;
     let amount = normalize_amount(req.amount)?;
     if amount > max_cpa_amount() {
+        record_decline(
+            &state.pool,
+            DeclineEvent {
+                channel: "aft_credit",
+                reason: DeclineReason::AmountExceedsMax,
+                account_id: Some(req.originator_account_id),
+                customer_id: Some(caller.customer_id),
+                amount: Some(amount),
+                counterparty: None,
+                metadata: serde_json::json!({}),
+            },
+        )
+        .await;
         return Err(AppError::BadRequest(
             "amount exceeds AFT file field limit".into(),
         ));
@@ -436,6 +450,19 @@ async fn create_debit(
     req.validate()?;
     let amount = normalize_amount(req.amount)?;
     if amount > max_cpa_amount() {
+        record_decline(
+            &state.pool,
+            DeclineEvent {
+                channel: "aft_debit",
+                reason: DeclineReason::AmountExceedsMax,
+                account_id: Some(req.originator_account_id),
+                customer_id: Some(caller.customer_id),
+                amount: Some(amount),
+                counterparty: None,
+                metadata: serde_json::json!({}),
+            },
+        )
+        .await;
         return Err(AppError::BadRequest(
             "amount exceeds AFT file field limit".into(),
         ));

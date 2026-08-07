@@ -19,6 +19,7 @@ use validator::Validate;
 
 use crate::errors::AppError;
 use crate::handlers::cards::{fetch_account_for_update, normalize_amount};
+use crate::handlers::declines::{record_decline, DeclineEvent, DeclineReason};
 use crate::handlers::AppState;
 use crate::lynx::iso20022::{self, Camt029, Camt056, CreditTransfer};
 use crate::middleware::auth::{AuthenticatedCustomer, AuthenticatedService};
@@ -185,6 +186,19 @@ async fn initiate_wire(
     let amount = normalize_amount(req.amount)?;
     let floor = min_amount(&state);
     if amount < floor {
+        record_decline(
+            &state.pool,
+            DeclineEvent {
+                channel: "lynx_wire",
+                reason: DeclineReason::BelowFloor,
+                account_id: Some(req.from_account_id),
+                customer_id: Some(caller.customer_id),
+                amount: Some(amount),
+                counterparty: None,
+                metadata: serde_json::json!({}),
+            },
+        )
+        .await;
         return Err(AppError::BadRequest(format!(
             "amount below the high-value floor of {floor}"
         )));
@@ -260,6 +274,19 @@ async fn initiate_wire(
         return Err(AppError::BadRequest("account is not active".into()));
     }
     if account.available_balance < amount {
+        record_decline(
+            &state.pool,
+            DeclineEvent {
+                channel: "lynx_wire",
+                reason: DeclineReason::InsufficientFunds,
+                account_id: Some(account.account_id),
+                customer_id: Some(account.customer_id),
+                amount: Some(amount),
+                counterparty: None,
+                metadata: serde_json::json!({}),
+            },
+        )
+        .await;
         return Err(AppError::InsufficientFunds);
     }
 
