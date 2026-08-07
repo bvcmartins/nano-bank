@@ -58,6 +58,9 @@ class BankClient:
     def cards(self, window: str = "24h") -> dict:
         return self._get("/api/v1/back-office/ops/cards", {"window": window})
 
+    def declines(self, window: str = "24h") -> dict:
+        return self._get("/api/v1/back-office/ops/declines", {"window": window})
+
     # --- Autonomous operational levers (self-verifying + audited server-side) ---
     # Each returns {"outcome": "executed"|"refused", ...}. The bank re-checks a
     # deterministic precondition and writes the attempt to the tamper-evident

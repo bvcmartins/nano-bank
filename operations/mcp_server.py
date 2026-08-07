@@ -54,6 +54,15 @@ def build_mcp(bank: BankClient) -> FastMCP:
         return _stringify(metrics.cards_summary(bank.cards(window)))
 
     @mcp.tool()
+    def declines(window: str = "24h") -> dict:
+        """Declined activity over a window (24h|7d|30d): counts + amounts by
+        category (nsf/limit/validation/status/other) and by channel
+        (card_authorize/interac_etransfer/aft_*/lynx_wire/withdrawal). 'other' is a
+        catch-all — do NOT characterize it as fraud (fraud data is out of scope).
+        Pair with `cards` for card approval/decline/NSF rates."""
+        return _stringify(metrics.declines_summary(bank.declines(window)))
+
+    @mcp.tool()
     def compute(operation: str, values: list[float]) -> dict:
         """Deterministic arithmetic on numbers you already got from other tools,
         so a derived figure stays tool-grounded — use this instead of doing math
@@ -111,6 +120,7 @@ def build_mcp(bank: BankClient) -> FastMCP:
                 "rails": metrics.rails_summary(bank.rails(window)),
                 "exceptions": metrics.exceptions_summary(bank.exceptions(window)),
                 "cards": metrics.cards_summary(bank.cards(window)),
+                "declines": metrics.declines_summary(bank.declines(window)),
             }
         )
 

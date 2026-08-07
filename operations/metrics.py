@@ -139,4 +139,22 @@ def cards_summary(payload: dict) -> dict:
             "single_purchase": int(
                 (payload.get("cardholders") or {}).get("single_purchase", 0)),
         },
+        # Approval/decline/NSF rates over the window (computed by the bank from
+        # the decline log + retained approved-auth holds). None-safe passthrough.
+        "rates": payload.get("rates"),
+    }
+
+
+def declines_summary(raw: dict) -> dict:
+    """Pass through the decline rollup from ops/declines (already aggregated and
+    risk-folded server-side). Defensive: drop a 'risk' bucket if one ever appears
+    so the COO can never see the fraud category."""
+    by_category = {k: v for k, v in (raw.get("by_category") or {}).items()
+                   if k != "risk"}
+    return {
+        "window": raw.get("window"),
+        "total_count": raw.get("total_count", 0),
+        "total_amount": raw.get("total_amount", "0"),
+        "by_category": by_category,
+        "by_channel": raw.get("by_channel") or {},
     }
