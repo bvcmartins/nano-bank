@@ -184,9 +184,12 @@ def main() -> None:
                     f"{agent} {'🟢' if agent_ok else '🔴'}")
 
         if st.button("🧵 New conversation", use_container_width=True,
-                     help="Forget the thread so memory-recall must come from durable "
-                          "storage, not this chat"):
+                     help="Clear this agent's chat and forget the thread, so "
+                          "memory-recall must come from durable storage, not this chat "
+                          "(the ledger is untouched)"):
             ss.threads[agent] = None
+            ss.hist[agent] = []          # wipe the on-screen transcript
+            ss.last.pop(agent, None)     # and the last turn's badge / run-tree
 
         if cfg["can_seed"]:
             if st.button("🌱 Seed open AFT batch", use_container_width=True,
