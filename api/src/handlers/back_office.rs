@@ -117,6 +117,7 @@ pub fn back_office_routes() -> Router<AppState> {
         .route("/ops/rails", get(ops_rails))
         .route("/ops/exceptions", get(ops_exceptions))
         .route("/ops/cards", get(ops_cards))
+        .route("/ops/declines", get(ops_declines))
 }
 
 // ---------------------------------------------------------------------------
@@ -485,7 +486,10 @@ async fn ops_float(
     _: AuthenticatedService,
     State(state): State<AppState>,
 ) -> Result<Json<FloatResponse>, AppError> {
-    let system_emails: Vec<String> = SYSTEM_CUSTOMER_EMAILS.iter().map(|s| s.to_string()).collect();
+    let system_emails: Vec<String> = SYSTEM_CUSTOMER_EMAILS
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     let rows = sqlx::query_as::<_, FloatRow>(
         "SELECT c.email AS email, a.account_type::text AS account_type, a.balance AS balance
          FROM accounts a
@@ -683,9 +687,8 @@ async fn count_since(
 
 /// Counts of the operational exceptions the ledger actually **records** over a
 /// window: failed transactions, reversals, returned/rejected AFT entries, and
-/// Lynx wire recalls. Note: declined authorizations and NSF-at-authorization are
-/// not persisted as rows today, so they are not (and cannot yet be) counted here
-/// — surfacing them would need new instrumentation (a later phase).
+/// Lynx wire recalls. Declined authorizations and NSF-at-authorization now live
+/// in the `decline_events` log — see the `/ops/declines` endpoint.
 async fn ops_exceptions(
     _: AuthenticatedService,
     State(state): State<AppState>,
@@ -772,6 +775,21 @@ struct CardholderEngagement {
     single_purchase: i64,
 }
 
+/// Card-authorization outcome rates over the window. `approved` counts the
+/// approved-auth holds (each approved authorization inserts one `visa_auth:%`
+/// hold; holds are soft-released, rows retained, so this is accurate regardless
+/// of later release/capture); `declined`/`nsf_declined` come from
+/// `decline_events`. Rates are `None` when there were no authorizations at all.
+#[derive(Serialize)]
+struct CardAuthRates {
+    approved: i64,
+    declined: i64,
+    nsf_declined: i64,
+    approval_rate: Option<f64>,
+    decline_rate: Option<f64>,
+    nsf_rate: Option<f64>,
+}
+
 #[derive(Serialize)]
 struct CardsResponse {
     window: String,
@@ -783,13 +801,15 @@ struct CardsResponse {
     card_transactions: Vec<CardTxnGroup>,
     /// Distinct vs one-and-done cardholders (by `card_purchase`) over the window.
     cardholders: CardholderEngagement,
+    /// Approval / decline / NSF rates over the window (from `decline_events` +
+    /// retained approved-auth holds).
+    rates: CardAuthRates,
 }
 
 /// Observable card operations: currently-open authorization holds (a now
-/// snapshot) plus card-tagged transactions grouped by type and status over the
-/// window. Approval/decline *rates* are intentionally absent — declined
-/// authorizations are not persisted as rows today, so a rate cannot be computed
-/// without new instrumentation (a later phase).
+/// snapshot), card-tagged transactions grouped by type and status over the
+/// window, and approval/decline/NSF **rates** computed from the `decline_events`
+/// log plus the retained approved-authorization holds.
 async fn ops_cards(
     _: AuthenticatedService,
     State(state): State<AppState>,
@@ -847,6 +867,47 @@ async fn ops_cards(
     )
     .await?;
 
+    // Approved authorizations = holds created in the window (each approved auth
+    // inserts one 'visa_auth:%' hold; holds are soft-released, rows retained).
+    let approved: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM account_holds WHERE reason LIKE 'visa_auth:%' AND created_at >= $1",
+    )
+    .bind(since)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(AppError::Database)?;
+    let declined: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM decline_events WHERE channel='card_authorize' AND occurred_at >= $1",
+    )
+    .bind(since)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(AppError::Database)?;
+    let nsf_declined: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM decline_events \
+         WHERE channel='card_authorize' AND reason_category='nsf' AND occurred_at >= $1",
+    )
+    .bind(since)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(AppError::Database)?;
+    let total = approved + declined;
+    let rate = |n: i64| {
+        if total > 0 {
+            Some(n as f64 / total as f64)
+        } else {
+            None
+        }
+    };
+    let rates = CardAuthRates {
+        approved,
+        declined,
+        nsf_declined,
+        approval_rate: rate(approved),
+        decline_rate: rate(declined),
+        nsf_rate: rate(nsf_declined),
+    };
+
     Ok(Json(CardsResponse {
         window,
         since,
@@ -856,5 +917,97 @@ async fn ops_cards(
             active: active_cardholders,
             single_purchase,
         },
+        rates,
+    }))
+}
+
+#[derive(Serialize)]
+struct DeclineBucket {
+    count: i64,
+    amount: Decimal,
+}
+
+#[derive(sqlx::FromRow)]
+struct DeclineGroupRow {
+    key: String,
+    count: i64,
+    amount: Decimal,
+}
+
+#[derive(Serialize)]
+struct DeclinesResponse {
+    window: String,
+    since: DateTime<Utc>,
+    total_count: i64,
+    total_amount: Decimal,
+    by_category: std::collections::BTreeMap<String, DeclineBucket>,
+    by_channel: std::collections::BTreeMap<String, DeclineBucket>,
+}
+
+fn declines_map(
+    rows: Vec<DeclineGroupRow>,
+) -> (
+    std::collections::BTreeMap<String, DeclineBucket>,
+    i64,
+    Decimal,
+) {
+    let mut m = std::collections::BTreeMap::new();
+    let (mut tc, mut ta) = (0i64, Decimal::ZERO);
+    for r in rows {
+        tc += r.count;
+        ta += r.amount;
+        m.insert(
+            r.key,
+            DeclineBucket {
+                count: r.count,
+                amount: r.amount,
+            },
+        );
+    }
+    (m, tc, ta)
+}
+
+/// Declines over the window, grouped by category and by channel. The fraud
+/// bucket (`reason_category='risk'`) is folded into `other` in SQL, so no fraud
+/// signal ever leaves the bank. Pairs with `ops_cards`'s rates for card-approval
+/// context; the other channels give NSF/limit visibility the rails otherwise hide.
+async fn ops_declines(
+    _: AuthenticatedService,
+    State(state): State<AppState>,
+    Query(q): Query<WindowQuery>,
+) -> Result<Json<DeclinesResponse>, AppError> {
+    let window = q.window.unwrap_or_else(|| "24h".to_string());
+    let since = window_cutoff(&window)?;
+
+    let by_category = sqlx::query_as::<_, DeclineGroupRow>(
+        "SELECT CASE WHEN reason_category='risk' THEN 'other' ELSE reason_category END AS key,
+                COUNT(*) AS count, COALESCE(SUM(amount),0) AS amount
+         FROM decline_events WHERE occurred_at >= $1
+         GROUP BY 1 ORDER BY 1",
+    )
+    .bind(since)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(AppError::Database)?;
+
+    let by_channel = sqlx::query_as::<_, DeclineGroupRow>(
+        "SELECT channel AS key, COUNT(*) AS count, COALESCE(SUM(amount),0) AS amount
+         FROM decline_events WHERE occurred_at >= $1
+         GROUP BY channel ORDER BY channel",
+    )
+    .bind(since)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(AppError::Database)?;
+
+    let (by_category, total_count, total_amount) = declines_map(by_category);
+    let (by_channel, _, _) = declines_map(by_channel);
+    Ok(Json(DeclinesResponse {
+        window,
+        since,
+        total_count,
+        total_amount,
+        by_category,
+        by_channel,
     }))
 }

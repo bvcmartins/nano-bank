@@ -311,3 +311,59 @@ async fn cards_summary_returns_holds_and_txn_groups() {
         "card_transactions should be an array"
     );
 }
+
+#[tokio::test]
+async fn declines_returns_bucketed_shape_for_a_service_token() {
+    let c = client();
+    if !stack_up(&c).await {
+        return;
+    }
+    let svc = service_token(&c).await;
+    let r = c
+        .get(format!("{}/api/v1/back-office/ops/declines?window=30d", base_url()))
+        .bearer_auth(&svc)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let body: serde_json::Value = r.json().await.unwrap();
+    assert!(body.get("by_category").is_some());
+    assert!(body.get("by_channel").is_some());
+    // The fraud bucket must never surface: 'risk' is folded to 'other'.
+    assert!(body["by_category"].get("risk").is_none());
+}
+
+#[tokio::test]
+async fn declines_rejects_a_customer_token() {
+    let c = client();
+    if !stack_up(&c).await {
+        return;
+    }
+    let cust = customer_token(&c).await;
+    let r = c
+        .get(format!("{}/api/v1/back-office/ops/declines?window=30d", base_url()))
+        .bearer_auth(&cust)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 401);
+}
+
+#[tokio::test]
+async fn cards_summary_now_carries_auth_rates() {
+    let c = client();
+    if !stack_up(&c).await {
+        return;
+    }
+    let svc = service_token(&c).await;
+    let r = c
+        .get(format!("{}/api/v1/back-office/ops/cards?window=30d", base_url()))
+        .bearer_auth(&svc)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let body: serde_json::Value = r.json().await.unwrap();
+    assert!(body["rates"].get("approved").is_some());
+    assert!(body["rates"].get("decline_rate").is_some());
+}
