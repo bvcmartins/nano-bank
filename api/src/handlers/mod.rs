@@ -9,6 +9,7 @@ pub mod back_office;
 pub mod ops_levers;
 pub mod cards;
 pub mod customers;
+pub mod declines;
 pub mod docs;
 pub mod finance;
 pub mod fraud_admin;
