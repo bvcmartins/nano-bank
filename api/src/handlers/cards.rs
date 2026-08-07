@@ -33,6 +33,7 @@ use uuid::Uuid;
 
 use crate::config::database::DatabasePool;
 use crate::errors::AppError;
+use crate::handlers::declines::{record_decline, DeclineEvent, DeclineReason};
 use crate::handlers::AppState;
 use crate::middleware::auth::AuthenticatedService;
 use crate::models::account::{Account, AccountStatus, AccountType};
@@ -245,6 +246,19 @@ async fn authorize(
         match screened {
             Ok(link) => fraud_link = Some(link),
             Err(AppError::TransactionDeclined) | Err(AppError::TransactionUnderReview(_)) => {
+                record_decline(
+                    &state.pool,
+                    DeclineEvent {
+                        channel: "card_authorize",
+                        reason: DeclineReason::RiskDeclined,
+                        account_id: Some(req.account_id),
+                        customer_id: Some(owner),
+                        amount: Some(amount),
+                        counterparty: Some(merchant.clone()),
+                        metadata: serde_json::json!({}),
+                    },
+                )
+                .await;
                 return Ok((
                     StatusCode::OK,
                     Json(AuthorizeResponse {
@@ -291,6 +305,19 @@ async fn authorize(
     // available_balance already nets out balance and active holds.
     if amount > card.available_balance {
         tx.rollback().await?;
+        record_decline(
+            &state.pool,
+            DeclineEvent {
+                channel: "card_authorize",
+                reason: DeclineReason::InsufficientCredit,
+                account_id: Some(card.account_id),
+                customer_id: Some(card.customer_id),
+                amount: Some(amount),
+                counterparty: Some(merchant.clone()),
+                metadata: serde_json::json!({ "available": card.available_balance.to_string() }),
+            },
+        )
+        .await;
         return Ok((
             StatusCode::OK,
             Json(AuthorizeResponse {
