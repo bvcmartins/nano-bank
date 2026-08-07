@@ -5,6 +5,7 @@ returned this turn. The trace of tool outputs is the oracle; there is no LLM
 here. (Numeric grounding is domain-agnostic — this is the CFO's verifier.)
 """
 from __future__ import annotations
+import math
 import re
 from decimal import Decimal, InvalidOperation
 
@@ -120,18 +121,65 @@ def _is_grounded(fig: Figure, grounded: list[Decimal]) -> bool:
     return False
 
 
+# Round-number policy thresholds ("wires above $1,000,000", "target <5% recalls")
+# are proposals, not claimed measurements — no tool can ground a hypothetical, so
+# flagging them as ungrounded is a false positive. A figure is exempt only when it
+# is BOTH round (<=2 significant figures, no fractional cents) AND sits in a
+# threshold / approximation clause. Requiring both keeps a fabricated *precise*
+# metric ("average wire was $1,234,567") strict — only hedged round numbers pass.
+_THRESHOLD_CUE = re.compile(
+    r"(?:\b(?:above|over|under|below|beyond|exceed(?:s|ing)?|approach(?:es|ing)?|"
+    r"greater than|less than|more than|fewer than|at least|at most|up to|"
+    r"no more than|no less than|in excess of|north of|south of|threshold|"
+    r"thresholds|cap(?:ped)?|ceiling|floor|limit|minimum|maximum|target(?:ing|s)?|"
+    r"around|roughly|about|approximately|approx\.?|nearly|almost|order of|"
+    r"upwards? of)\b|[~≥≤><])",
+    re.I)
+
+
+def _is_round(value: Decimal) -> bool:
+    """A round magnitude: a whole number equal to itself at 2 significant figures
+    (1,000,000 / 1,500,000 / 500,000 / 5 / 90 — yes; 1,234,567 / 949,191.61 — no).
+    Fractional cents disqualify it: a measurement, not a threshold."""
+    v = abs(value)
+    if v == 0 or v != v.to_integral_value():
+        return False
+    exp = int(math.floor(math.log10(float(v))))
+    quant = Decimal(10) ** max(exp - 1, 0)          # step that keeps 2 sig figs
+    return (v / quant) == (v / quant).to_integral_value()
+
+
+def _threshold_exempt(answer: str) -> set[str]:
+    """Figure *texts* to exempt: round numbers appearing in a threshold or
+    approximation clause. Scoped per sentence so a cue only covers figures in the
+    same clause, not the whole answer."""
+    exempt: set[str] = set()
+    for sent in _claims._sentences(answer):
+        if not _THRESHOLD_CUE.search(sent):
+            continue
+        for f in claimed_figures(sent):
+            if _is_round(f.value):
+                exempt.add(f.text)
+    return exempt
+
+
 def ungrounded(answer: str, trace: list[dict]) -> list[str]:
-    """The prose figures that match no number any tool returned this turn."""
+    """The prose figures that match no number any tool returned this turn,
+    excluding round policy thresholds (which no tool can ground)."""
     grounded = grounded_values(trace)
+    exempt = _threshold_exempt(answer)
     return [f.text for f in claimed_figures(answer)
-            if not _is_grounded(f, grounded)]
+            if f.text not in exempt and not _is_grounded(f, grounded)]
 
 
 def report(answer: str, trace: list[dict], *, revised: bool) -> dict:
     grounded = grounded_values(trace)
+    exempt = _threshold_exempt(answer)
     g: list[str] = []
     u: list[str] = []
     for f in claimed_figures(answer):
+        if f.text in exempt:
+            continue        # a round policy threshold — neither grounded nor a claim
         (g if _is_grounded(f, grounded) else u).append(f.text)
     return {"grounded": g, "ungrounded": u,
             "unsupported_claims": _claims.unsupported_claims(answer, trace),

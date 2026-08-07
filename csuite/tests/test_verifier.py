@@ -85,6 +85,39 @@ def test_grounded_and_ungrounded_together():
     assert verifier.ungrounded(ans, trace) == ["42.0%"]
 
 
+def test_round_threshold_in_a_cue_clause_is_not_flagged():
+    # The real-world false positive: a proposed policy threshold no tool returns.
+    trace = _trace("{'avg_wire': '949191.61'}")
+    assert verifier.ungrounded(
+        "Add a cooling-off checkpoint for wires exceeding $1,000,000.", trace) == []
+    assert verifier.ungrounded(
+        "Target a recall rate below 5% by count.", trace) == []
+    assert verifier.ungrounded(
+        "Dual-verify wires above ~$500,000.", trace) == []
+
+
+def test_fabricated_precise_metric_is_still_flagged_even_near_a_cue():
+    # Roundness is the guard: a precise, non-round figure stays strict.
+    trace = _trace("{'avg_wire': '949191.61'}")
+    assert verifier.ungrounded(
+        "The average recalled wire, above trend, was $1,099,939.06.", trace) \
+        == ["$1,099,939.06"]
+
+
+def test_round_number_without_a_cue_is_still_flagged():
+    # Exemption needs the threshold/approximation context, not just roundness.
+    trace = _trace("{'total': '123.00'}")
+    assert verifier.ungrounded("We moved $2,000,000 last week.", trace) == ["$2,000,000"]
+
+
+def test_report_drops_exempt_threshold_from_both_lists():
+    trace = _trace("{'success_rate': '0.2131'}")
+    rep = verifier.report("Success 21.31%; cap new wires at $1,000,000.",
+                          trace, revised=False)
+    assert rep["grounded"] == ["21.31%"]
+    assert rep["ungrounded"] == []
+
+
 def test_report_splits_grounded_and_ungrounded():
     trace = _trace("{'success_rate': '0.2131'}")
     rep = verifier.report("Success 21.31% vs made-up $9,999.00.", trace,
