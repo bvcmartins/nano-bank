@@ -79,6 +79,11 @@ if [ "$DO_SEED" = "1" ]; then
   # seed-demo.sh). Override any of these on the command line for more.
   CUSTOMERS=25 VISA_CYCLES=200 INTERAC_CYCLES=80 AFT_CYCLES=30 LYNX_CYCLES=15 \
     testing/seed-demo.sh
+  # Leave one open outbound AFT batch un-cut so the lever beat has a real action
+  # to take (seed-demo's AFT simulator plays the cutoff itself, so we top up a
+  # fresh batch AFTER it and let the COO cut this one).
+  echo "🌱 leaving one open AFT batch for the COO to cut ..."
+  API_URL=http://localhost:8081 python3 demos/05-coo/seed_open_aft.py
 fi
 
 # Drive the narrated arc. The driver only speaks HTTP to the COO, so it needs
@@ -93,3 +98,9 @@ fi
 echo "🎬 running the narrated COO demo ..."
 COO_API_URL=http://localhost:8093 PYTHONPATH="$PWD" \
   "$VENV/bin/python" demos/05-coo/drive.py $BEATS_ARG
+
+# Show the audit trail the lever beat just wrote to — the COO's action is
+# recorded, hash-chained and immutable, in a ledger the agent cannot touch.
+echo
+echo "🔎 inspecting the tamper-evident agent-action ledger ..."
+CTX="$CTX" NS="$NS" demos/05-coo/inspect-ledger.sh

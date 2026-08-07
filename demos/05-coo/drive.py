@@ -71,6 +71,18 @@ BEATS = [
         "message": "What's our total operational float right now?",
         "thread": "new",
     },
+    {
+        "title": "Autonomous action — the COO pulls a lever",
+        "shows": "the COO doesn't just report: it ACTS. It checks the outbound AFT "
+                 "batch and, seeing entries awaiting a cutoff, pulls "
+                 "execute_cut_aft_batch on its own judgement — no human confirmation. "
+                 "The lever self-verifies server-side and the attempt is written to "
+                 "the tamper-evident audit ledger (see demos/05-coo/inspect-ledger.sh)",
+        "message": "Check the outbound AFT batch. If there are entries accrued and "
+                   "awaiting a cutoff, cut the batch now — don't ask me first. Then "
+                   "tell me exactly what you did and the effect the bank returned.",
+        "thread": "new",
+    },
 ]
 
 if __name__ == "__main__":

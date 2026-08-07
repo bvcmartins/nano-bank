@@ -78,6 +78,34 @@ What's our total operational float right now?
 Watch for: the total quoted **with** its basis — a gross magnitude of signed
 system balances, not a net position — never as a bare number.
 
+## 8 · Autonomous action — the COO pulls a lever
+
+> The COO is an **autonomous operator**, not just an analyst — it takes real
+> operational actions on its own judgement, with no human confirmation. For this
+> to *do* something, an open outbound AFT batch must be waiting (`run-demo.sh`
+> seeds one; otherwise the COO will correctly refuse and say there's nothing to
+> cut).
+
+```
+Check the outbound AFT batch. If there are entries accrued and awaiting a cutoff, cut the batch now — don't ask me first. Then tell me exactly what you did and the effect the bank returned.
+```
+
+Watch for: a `🔧 execute_cut_aft_batch` chip in the trace — the COO *acting*, not
+reporting. The lever **self-verifies** server-side (the bank re-checks that an
+open, non-empty batch exists and would refuse otherwise), and the attempt —
+executed or refused — is written to the **tamper-evident agent-action ledger**.
+
+Then inspect that ledger from your shell:
+
+```
+demos/05-coo/inspect-ledger.sh              # the chain + integrity check
+demos/05-coo/inspect-ledger.sh --tamper-demo  # prove UPDATE/DELETE are rejected
+```
+
+You'll see the row this beat just wrote (`coo · cut_aft_batch · executed`), the
+hash chain (each `prev_hash` = the prior `entry_hash`), and `chain INTACT`. The
+ledger is out of bounds for the agents themselves — this is the operator view.
+
 ---
 
 ### Reading the badge

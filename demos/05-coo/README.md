@@ -1,9 +1,11 @@
 # Agent COO — demo
 
-A narrated walk-through of the nano-bank Chief Operating Officer: a read-only
-operational analyst that answers **only** from its operations tools, plans and
-delegates multi-step reviews, grounds every figure against a tool result, and
-stays in its lane.
+A narrated walk-through of the nano-bank Chief Operating Officer: an **autonomous
+operational officer** that answers **only** from its operations tools, plans and
+delegates multi-step reviews, grounds every figure against a tool result, stays
+in its lane — and **acts**, pulling self-verifying operational levers on its own
+judgement with no human in the loop, every action written to a tamper-evident
+audit ledger.
 
 Two ways to run it, same story:
 
@@ -14,9 +16,9 @@ Two ways to run it, same story:
   the same beats and watch the answer, the grounding badge, and an expandable
   **harness trace** panel (plan / todos / subagent / memory) update live.
 
-Everything here is a demo: it only ever **asks** the read-only COO. Seeding is
-demo/test-only — it runs from the host against a port-forwarded bank, never from
-an app process or a k8s manifest.
+The narration only **asks** the COO — but the COO itself may **act** (beat 8
+pulls a real lever). Seeding is demo/test-only: it runs from the host against a
+port-forwarded bank, never from an app process or a k8s manifest.
 
 ## Run it (in-cluster)
 
@@ -58,6 +60,7 @@ expandable **harness trace** panel update per turn.
 | 3b | *(fresh conversation)* "Recall that note; where should ops focus?" | **Memory recall across turns** — a new thread with no shared state, so the only way it knows the note is durable Qdrant memory, not in-thread history |
 | 4 | "Fraud rate looks high — what's driving it?" and "What was our NIM and RAROC?" | **Scope discipline** — fraud/AML is deliberately unreachable, and the books are the CFO's domain; the COO refuses rather than engaging |
 | 5 | "What's our total operational float right now?" | **Caveated figures** — the headline float is quoted with its **basis** (a gross magnitude of signed system balances, not a net position), never as a bare number |
+| 6 | "Cut the outbound AFT batch now — don't ask me first." | **Autonomous action** — the COO checks the batch and pulls **`execute_cut_aft_batch`** on its own judgement (no human confirmation). The lever **self-verifies** server-side and refuses if there's nothing to cut; every attempt lands in the **tamper-evident agent-action ledger**. Inspect it with `demos/05-coo/inspect-ledger.sh` |
 
 ## What you're looking at
 
@@ -80,5 +83,13 @@ Each `/ask` returns `{answer, thread_id, trace, verification}`:
   shares) are done deterministically by a tool so they stay grounded — the COO
   never hand-computes and never asks you to. The verifier still catches any
   ungrounded number that slips through and forces one revise pass.
+- The **autonomous-action** beat needs an open outbound AFT batch to cut;
+  `run-demo.sh` seeds one right before the arc (`seed_open_aft.py`). With
+  `--no-seed`, or if you re-run the beat after the batch is already cut, the COO
+  will correctly **refuse** ("no open batch to cut") — which is still audited.
+  Either way, `demos/05-coo/inspect-ledger.sh` shows the ledger row and verifies
+  the hash chain; `--tamper-demo` proves UPDATE/DELETE are rejected server-side.
+  The ledger spans every agent (the CFO's period closes appear there too) and is
+  out of bounds for the agents themselves.
 - Re-running `run-demo.sh` (with seeding) adds *more* bounded activity; the
   figures grow. `testing/cleanup.sh` wipes the bank back to empty.
