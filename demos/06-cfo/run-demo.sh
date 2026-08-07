@@ -73,10 +73,28 @@ if [ "$DO_SEED" = "1" ]; then
   echo "🌱 seeding bank activity (bounded, terminating — demo/test-only) ..."
   CUSTOMERS=25 VISA_CYCLES=200 INTERAC_CYCLES=80 AFT_CYCLES=30 LYNX_CYCLES=15 \
     testing/seed-demo.sh
+
+  # Accrue interest month-to-date (deposit interest expense) and seed a loan book
+  # (earning assets + loan income) so the CFO's NIM/RAROC are believable — a
+  # deposit-only bank has almost no earning assets. Demo/test-only.
+  echo "📈 accruing interest month-to-date + seeding a loan book ..."
+  SVC="${SERVICE_CLIENT_SECRET:-nano-bank-visa-network-secret-change-me}"
+  TOK=$(curl -s -m5 -XPOST http://localhost:8081/api/v1/auth/service-token \
+    -H 'content-type: application/json' -d "{\"client_secret\":\"$SVC\"}" \
+    | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
+  YM=$(date +%Y-%m)
+  for i in $(seq 1 "$(date +%d)"); do
+    D=$(printf "%02d" "$i")
+    curl -s -m 20 -XPOST http://localhost:8081/api/v1/finance/accrue \
+      -H "authorization: Bearer $TOK" -H 'content-type: application/json' \
+      -d "{\"as_of\":\"$YM-$D\"}" >/dev/null || true
+  done
+  testing/seed-loan-book.sh
+
   # Close the prior + current month so reviews (and period-over-period RAROC)
   # have snapshots. The CFO's close_period captures the GL trial balance; the
   # first call is slow (the CFO downloads its memory embedder on cold start).
-  CUR=$(date +%Y-%m); PREV=$(date -d 'last month' +%Y-%m)
+  CUR="$YM"; PREV=$(date -d 'last month' +%Y-%m)
   for P in "$PREV" "$CUR"; do
     echo "📸 closing period $P via the CFO ..."
     curl -s -m 500 -XPOST http://localhost:8089/ask -H 'content-type: application/json' \

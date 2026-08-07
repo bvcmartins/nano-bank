@@ -67,3 +67,8 @@ Then type the beats from `questions.md`.
   fastembed memory model on cold start. Warm requests stream in ~20s.
 - `close_period` snapshots the **current** GL trial balance tagged with the
   period label, so period-over-period metrics reflect the state at snapshot time.
+- The seed also **accrues interest** and posts a **loan book**
+  (`testing/seed-loan-book.sh`) so NIM/RAROC are believable — nano-bank has no
+  loan product, and a deposit-only bank shows a deeply negative NIM (interest
+  expense on deposits, almost no earning assets). The loan book is a demo GL
+  scaffold (aggregate `loans_receivable` + `interest_income`), not real loans.
