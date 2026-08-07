@@ -47,6 +47,30 @@ class FinanceDB:
                 "ON CONFLICT (period, role) DO UPDATE SET balance = EXCLUDED.balance,"
                 " captured_at = now()", (period, role, bal))
 
+    def record_close(self, period: str, balances: dict) -> int:
+        """Write the period snapshot AND append the tamper-evident ledger entry in
+        ONE transaction — no state-changing agent action without its audit. The
+        ledger (agent_action_ledger) is hash-chained + append-only server-side and
+        unreachable by any agent. Returns roles_captured."""
+        import json
+        import psycopg2
+        conn = psycopg2.connect(**self._db)
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    for role, bal in balances.items():
+                        cur.execute(
+                            "INSERT INTO gl_snapshots (period, role, balance) VALUES (%s,%s,%s) "
+                            "ON CONFLICT (period, role) DO UPDATE SET balance = EXCLUDED.balance,"
+                            " captured_at = now()", (period, role, bal))
+                    cur.execute(
+                        "SELECT append_agent_action('cfo','close_period',%s::jsonb,%s::jsonb)",
+                        (json.dumps({"period": period}),
+                         json.dumps({"roles_captured": len(balances)})))
+            return len(balances)
+        finally:
+            conn.close()
+
     def read_snapshot(self, period: str) -> dict:
         rows = self._rows(
             "-- read_snapshot\nSELECT role, balance FROM gl_snapshots WHERE period = %s",

@@ -17,5 +17,7 @@ def close_period(period: str, balances_rows: list, db) -> dict:
         if role is None:
             continue
         snapshot[role] = Decimal(str(row["balance"]))
-    db.write_snapshot(period, snapshot)
-    return {"period": period, "roles_captured": len(snapshot)}
+    # Snapshot + its tamper-evident ledger entry commit together — a CFO
+    # close_period never lands without its audit row.
+    captured = db.record_close(period, snapshot)
+    return {"period": period, "roles_captured": captured}

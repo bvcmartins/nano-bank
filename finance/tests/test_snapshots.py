@@ -6,8 +6,10 @@ class RecorderDB:
     def __init__(self):
         self.written = None
 
-    def write_snapshot(self, period, balances):
+    def record_close(self, period, balances):
+        # snapshot + tamper-evident ledger entry, atomically (audited)
         self.written = (period, balances)
+        return len(balances)
 
 
 def test_close_period_maps_codes_to_roles():
