@@ -121,11 +121,15 @@ def run_console(*, title: str, page_icon: str, api_url: str,
             except Exception as e:  # noqa: BLE001
                 answer = f"⚠️ agent unreachable: {e}"
 
-            st.markdown(esc(answer))
-            if veri is not None:
-                line = badge(veri)
-                (st.warning if (veri.get("ungrounded") or veri.get("unsupported_claims"))
-                 else st.caption)(line)
+            # The answer in its own clearly-separated box, above the run-trace,
+            # so the streamed reasoning never crowds it out.
+            with st.container(border=True):
+                st.markdown("#### 💬 Answer")
+                st.markdown(esc(answer))
+                if veri is not None:
+                    line = badge(veri)
+                    (st.warning if (veri.get("ungrounded") or veri.get("unsupported_claims"))
+                     else st.caption)(line)
             if trace:
                 h = extract_highlights(trace)
                 chips = []
