@@ -385,7 +385,13 @@ async fn engine_mode_agent_refusal_audits_once() {
     let resp = agent_transfer(&c, &atoken, to, 40.0).await;
     assert_eq!(resp.status().as_u16(), 403, "watched destination must 403");
     let v: Value = resp.json().await.unwrap();
-    assert_eq!(v["error"]["code"], "TRANSACTION_UNDER_REVIEW");
+    // The agent plane returns the OPAQUE refusal, not the specific review code:
+    // `refusal_for_agent` (handlers/agent_api.rs) collapses every refusal —
+    // including hold_review — to `TRANSFER_REFUSED`, because *why* a transfer was
+    // refused is deliberately not the agent's business. The specific reason
+    // survives for the granting customer in `agent_actions` (asserted below), not
+    // in the HTTP body. Do not "fix" this back to TRANSACTION_UNDER_REVIEW.
+    assert_eq!(v["error"]["code"], "TRANSFER_REFUSED");
 
     if let Some(db) = test_db().await {
         let rows: Vec<(String, Option<String>)> = sqlx::query_as(
