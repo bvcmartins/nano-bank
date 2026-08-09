@@ -6,12 +6,14 @@ from typing import Mapping, Optional
 
 _DEFAULT_CONTEXTS = [("kind-nano-bank", "nano-bank"),
                      ("kind-modern-core", "modern-core")]
+# Only services that actually expose an HTTP /health endpoint. The MCP servers
+# (operations-mcp, finance-mcp) are FastMCP apps with no /health route — probing
+# them would always 404, so they are NOT targets; their liveness is covered by
+# estate_health's k8s read instead.
 _DEFAULT_HEALTH = [
     ("bank-api", "http://bank-api:8081/health"),
     ("coo", "http://coo:8093/health"),
     ("cfo", "http://cfo:8089/health"),
-    ("operations-mcp", "http://operations-mcp:8092/health"),
-    ("finance-mcp", "http://finance-mcp:8088/health"),
 ]
 
 

@@ -8,6 +8,21 @@ import httpx
 
 from .config import Settings
 
+# Status/check values that count as healthy. Different services word it
+# differently: the agents say "ok", bank-api (Rust) says "healthy". Match any.
+_OK_WORDS = {"ok", "healthy", "up", "pass", "passing", "ready", "alive"}
+
+
+def _check_ok(v) -> bool:
+    """A sub-check value is healthy if it's a truthy bool or a healthy word.
+    Services disagree on the type: the agents use booleans ({"qdrant": true}),
+    bank-api uses strings ({"database": "healthy"})."""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        return v.strip().lower() in _OK_WORDS
+    return bool(v)
+
 
 class HealthClient:
     def __init__(self, settings: Settings,
@@ -21,9 +36,15 @@ class HealthClient:
             body = r.json() if r.headers.get("content-type", "").startswith(
                 "application/json") else {}
             status = body.get("status", "ok" if r.is_success else "error")
-            ok = r.is_success and status == "ok"
+            ok = r.is_success and str(status).strip().lower() in _OK_WORDS
+            # Sub-probes live under `checks` (agents) or `services` (bank-api);
+            # normalize their values to booleans for metrics.service_health.
+            raw = body.get("checks")
+            if raw is None:
+                raw = body.get("services", {})
+            checks = {k: _check_ok(v) for k, v in (raw or {}).items()}
             return {"service": label, "ok": bool(ok), "status": status,
-                    "checks": body.get("checks", {})}
+                    "checks": checks}
         except Exception as e:  # noqa: BLE001 — a down service is data
             return {"service": label, "ok": False, "status": "unreachable",
                     "checks": {}, "error": f"{type(e).__name__}: {e}"}

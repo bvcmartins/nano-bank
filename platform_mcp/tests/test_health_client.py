@@ -33,3 +33,15 @@ def test_non_ok_status_is_not_ok():
     out = HealthClient(_settings(), transport=httpx.MockTransport(handler)).probe()
     assert all(p["ok"] is False for p in out)
     assert out[0]["checks"] == {"ollama": False}
+
+
+def test_healthy_status_and_string_service_checks():
+    # bank-api style: status "healthy" (not "ok"), sub-probes under `services`
+    # with STRING values — normalize to booleans and treat "healthy" as ok.
+    def handler(request):
+        return httpx.Response(200, json={
+            "status": "healthy",
+            "services": {"api": "healthy", "database": "error"}})
+    out = HealthClient(_settings(), transport=httpx.MockTransport(handler)).probe()
+    assert out[0]["ok"] is True
+    assert out[0]["checks"] == {"api": True, "database": False}

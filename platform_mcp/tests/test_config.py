@@ -7,8 +7,12 @@ def test_defaults():
     assert s.kubeconfig_path == "/etc/platform/kubeconfig"
     assert ("kind-nano-bank", "nano-bank") in s.contexts
     assert ("kind-modern-core", "modern-core") in s.contexts
+    # Only services that actually expose a /health endpoint are probed. The MCP
+    # servers (operations-mcp, finance-mcp) are FastMCP apps with no /health
+    # route (their up/down is covered by estate_health's k8s read), so they are
+    # NOT health targets.
     labels = {lbl for lbl, _ in s.health_targets}
-    assert {"bank-api", "coo", "cfo", "operations-mcp", "finance-mcp"} <= labels
+    assert labels == {"bank-api", "coo", "cfo"}
     assert s.timeout == 10.0
 
 
