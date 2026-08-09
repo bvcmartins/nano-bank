@@ -30,3 +30,6 @@ mcp/.env.demo
 HANDOFF.md
 agentic-banking-design.md
 PLAN-*.md
+
+# local python venv for tests
+.venv/
