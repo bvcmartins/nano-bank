@@ -172,7 +172,11 @@ def ungrounded(answer: str, trace: list[dict]) -> list[str]:
             if f.text not in exempt and not _is_grounded(f, grounded)]
 
 
-def report(answer: str, trace: list[dict], *, revised: bool) -> dict:
+def report(answer: str, trace: list[dict], *, revised: bool,
+           claims_fn=None) -> dict:
+    # claims_fn lets each agent supply its own claim guard (the CTO guards
+    # different phantom concepts than the COO/CFO); default = shared behavior.
+    _claims_fn = claims_fn or _claims.unsupported_claims
     grounded = grounded_values(trace)
     exempt = _threshold_exempt(answer)
     g: list[str] = []
@@ -182,7 +186,7 @@ def report(answer: str, trace: list[dict], *, revised: bool) -> dict:
             continue        # a round policy threshold — neither grounded nor a claim
         (g if _is_grounded(f, grounded) else u).append(f.text)
     return {"grounded": g, "ungrounded": u,
-            "unsupported_claims": _claims.unsupported_claims(answer, trace),
+            "unsupported_claims": _claims_fn(answer, trace),
             "revised": revised}
 
 

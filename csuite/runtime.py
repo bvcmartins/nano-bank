@@ -65,7 +65,8 @@ def _build(*, settings, prompt, model, tools, memory, agent, thread_id):
 
 
 async def ask(*, settings, message: str, prompt: str, model, tools, agent: str,
-              thread_id: Optional[str] = None, memory=None) -> dict:
+              thread_id: Optional[str] = None, memory=None, claims_fn=None) -> dict:
+    _claims_fn = claims_fn or claims.unsupported_claims
     react, log, _, thread_id = _build(settings=settings, prompt=prompt, model=model,
                                       tools=tools, memory=memory, agent=agent,
                                       thread_id=thread_id)
@@ -82,7 +83,7 @@ async def ask(*, settings, message: str, prompt: str, model, tools, agent: str,
 
     revised = False
     figs = verifier.ungrounded(answer, rec.events())
-    clms = claims.unsupported_claims(answer, rec.events())
+    clms = _claims_fn(answer, rec.events())
     if figs or clms:
         revised = True
         rec.mark("revision", figures=figs, claims=clms)
@@ -92,18 +93,20 @@ async def ask(*, settings, message: str, prompt: str, model, tools, agent: str,
 
     trace = merge(rec.events(), log.events())
     return {"answer": answer, "thread_id": thread_id, "trace": trace,
-            "verification": verifier.report(answer, rec.events(), revised=revised)}
+            "verification": verifier.report(answer, rec.events(), revised=revised,
+                                            claims_fn=_claims_fn)}
 
 
 _SENTINEL = object()
 
 
 async def ask_stream(*, settings, message: str, prompt: str, model, tools, agent: str,
-                     thread_id: Optional[str] = None, memory=None
+                     thread_id: Optional[str] = None, memory=None, claims_fn=None
                      ) -> AsyncIterator[dict]:
     """Yield the run as it happens: `{"event": <trace event>}` per start/step/phase
     the instant it fires, then exactly one `{"final": {...}}`. Same verify-then-
     revise flow as `ask`."""
+    _claims_fn = claims_fn or claims.unsupported_claims
     react, log, _, thread_id = _build(settings=settings, prompt=prompt, model=model,
                                       tools=tools, memory=memory, agent=agent,
                                       thread_id=thread_id)
@@ -138,7 +141,7 @@ async def ask_stream(*, settings, message: str, prompt: str, model, tools, agent
 
         revised = False
         figs = verifier.ungrounded(answer, rec.events())
-        clms = claims.unsupported_claims(answer, rec.events())
+        clms = _claims_fn(answer, rec.events())
         if figs or clms:
             revised = True
             rec.mark("revision", figures=figs, claims=clms)
@@ -151,7 +154,8 @@ async def ask_stream(*, settings, message: str, prompt: str, model, tools, agent
         trace = merge(rec.events(), log.events())
         yield {"final": {"answer": answer, "thread_id": thread_id, "trace": trace,
                          "verification": verifier.report(answer, rec.events(),
-                                                          revised=revised)}}
+                                                          revised=revised,
+                                                          claims_fn=_claims_fn)}}
     except Exception as e:  # noqa: BLE001
         yield {"final": {"answer": f"⚠️ the {agent} run failed: {type(e).__name__}: {e}",
                          "thread_id": thread_id,
