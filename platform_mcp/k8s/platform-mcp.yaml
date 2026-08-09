@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: platform-mcp
+  namespace: nano-bank
+  labels: { app: platform-mcp }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: platform-mcp } }
+  template:
+    metadata: { labels: { app: platform-mcp } }
+    spec:
+      containers:
+      - name: mcp
+        image: nano-platform-mcp:dev
+        imagePullPolicy: Never
+        ports: [ { containerPort: 8094 } ]
+        env:
+        - { name: MCP_PORT,        value: "8094" }
+        - { name: KUBECONFIG_PATH, value: /etc/platform/kubeconfig }
+        volumeMounts:
+        - name: kubeconfig
+          mountPath: /etc/platform
+          readOnly: true
+      volumes:
+      - name: kubeconfig
+        secret:
+          secretName: nano-platform-kubeconfig
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: platform-mcp
+  namespace: nano-bank
+spec:
+  selector: { app: platform-mcp }
+  ports: [ { port: 8094, targetPort: 8094 } ]
