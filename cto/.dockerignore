@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+tests/
+verify-cto.sh
+k8s/
+Dockerfile
+.dockerignore

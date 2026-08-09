@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cto
+  namespace: nano-bank
+  labels: { app: cto }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: cto } }
+  template:
+    metadata: { labels: { app: cto } }
+    spec:
+      containers:
+      - name: cto
+        image: nano-cto:dev
+        imagePullPolicy: Never
+        ports: [ { containerPort: 8095 } ]
+        envFrom:
+        - secretRef: { name: nano-agent-secrets }   # provides OLLAMA_API_KEY
+        env:
+        - { name: PLATFORM_MCP_URL, value: http://platform-mcp:8094/mcp }
+        - { name: OLLAMA_BASE_URL,  value: https://ollama.com/v1 }
+        - { name: CTO_MODEL,        value: kimi-k2.6 }
+        - { name: API_PORT,         value: "8095" }
+        - { name: QDRANT_URL,       value: http://agent-qdrant:6333 }
+        - { name: MEMORY_NAMESPACE, value: cto }
+        livenessProbe:
+          httpGet: { path: /livez, port: 8095 }
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet: { path: /health, port: 8095 }
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cto
+  namespace: nano-bank
+spec:
+  selector: { app: cto }
+  ports: [ { port: 8095, targetPort: 8095 } ]
