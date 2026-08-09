@@ -1006,3 +1006,201 @@ async fn fraud_link_resolves_a_captured_card_purchase() {
         .unwrap();
     assert_eq!(seen, 1, "operation_id {op_id} must name a real engine decision");
 }
+
+// ---------------------------------------------------------------------------
+// Rail fraud-link resolver: /admin/rails/{rail}/{rail_id}/fraud-link
+// ---------------------------------------------------------------------------
+
+async fn fraud_link_rail(
+    c: &reqwest::Client,
+    token: &str,
+    rail: &str,
+    rail_id: Uuid,
+) -> reqwest::Response {
+    c.get(format!(
+        "{}/api/v1/fraud/admin/rails/{rail}/{rail_id}/fraud-link",
+        base_url()
+    ))
+    .bearer_auth(token)
+    .send()
+    .await
+    .unwrap()
+}
+
+/// The resolver maps a rail's own id to the screened decision — same answer the
+/// transaction route gives, without the caller having to know the money
+/// `transaction_id`. Asserted against the engine's `decisions` table, not merely
+/// "is a UUID": a well-formed id that isn't the one the engine recorded is worse
+/// than a null.
+#[tokio::test]
+async fn rail_fraud_link_resolves_an_interac_etransfer() {
+    let c = client();
+    require_stack!(&c);
+    require_fraud_e2e!(&c);
+    let (_, email) = create_customer(&c).await;
+    let token = login_with_device(&c, &email, format!("dev-{}", Uuid::new_v4()).as_str()).await;
+    let account = create_account(&c, &token).await;
+    if seed_deposit(&c, &token, account, 5000.0).await.is_none() {
+        return;
+    }
+    let sent = c
+        .post(format!("{}/api/v1/interac/etransfers", base_url()))
+        .bearer_auth(&token)
+        .json(&json!({
+            "from_account_id": account,
+            "amount": 60.00,
+            "recipient_handle_type": "email",
+            "recipient_handle_value": format!("rail-{}@example.com", Uuid::new_v4()),
+            "security_question": "q",
+            "security_answer": "a",
+            "idempotency_key": format!("rail-{}", Uuid::new_v4()),
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(sent.status().is_success(), "interac send: {}", sent.status());
+    let etransfer_id =
+        Uuid::parse_str(sent.json::<Value>().await.unwrap()["etransfer_id"].as_str().unwrap())
+            .unwrap();
+
+    let svc = service_token(&c).await;
+    let link = fraud_link_rail(&c, &svc, "interac", etransfer_id).await;
+    assert_eq!(link.status().as_u16(), 200);
+    let op_id = link.json::<Value>().await.unwrap()["operation_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("interac etransfer must resolve"))
+        .to_string();
+    assert_engine_decision_exists(&c, &op_id).await;
+}
+
+/// Lynx: the linkage sits on the send-time hold (`settlement_transaction_id`),
+/// stamped at `/wires`; reachable straight away, no network settle needed.
+#[tokio::test]
+async fn rail_fraud_link_resolves_a_lynx_wire() {
+    let c = client();
+    require_stack!(&c);
+    require_fraud_e2e!(&c);
+    let (_, email) = create_customer(&c).await;
+    let token = login_with_device(&c, &email, format!("dev-{}", Uuid::new_v4()).as_str()).await;
+    let account = create_account(&c, &token).await;
+    if seed_deposit(&c, &token, account, 50000.0).await.is_none() {
+        return;
+    }
+    let sent = c
+        .post(format!("{}/api/v1/lynx/wires", base_url()))
+        .bearer_auth(&token)
+        .json(&json!({
+            "from_account_id": account,
+            "amount": 15000.00,
+            "counterparty_name": "Acme Corp",
+            "counterparty_institution": "003",
+            "counterparty_account": "9876543",
+            "idempotency_key": format!("rail-{}", Uuid::new_v4()),
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(sent.status().is_success(), "lynx wire: {}", sent.status());
+    let sv: Value = sent.json().await.unwrap();
+    let wire_id = Uuid::parse_str(sv["wire_id"].as_str().unwrap()).unwrap();
+
+    let svc = service_token(&c).await;
+    let link = fraud_link_rail(&c, &svc, "lynx", wire_id).await;
+    assert_eq!(link.status().as_u16(), 200);
+    let op_id = link.json::<Value>().await.unwrap()["operation_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("lynx wire must resolve"))
+        .to_string();
+    assert_engine_decision_exists(&c, &op_id).await;
+}
+
+/// AFT: keyed on the **entry** id (a batch has many); the linkage lands on
+/// `settle_transaction_id`, so the batch is submitted + settled first.
+#[tokio::test]
+async fn rail_fraud_link_resolves_an_aft_entry() {
+    let c = client();
+    require_stack!(&c);
+    require_fraud_e2e!(&c);
+    let (_, email) = create_customer(&c).await;
+    let token = login_with_device(&c, &email, format!("dev-{}", Uuid::new_v4()).as_str()).await;
+    let account = create_account(&c, &token).await;
+    if seed_deposit(&c, &token, account, 5000.0).await.is_none() {
+        return;
+    }
+    let credit = c
+        .post(format!("{}/api/v1/aft/credits", base_url()))
+        .bearer_auth(&token)
+        .json(&json!({
+            "originator_account_id": account,
+            "amount": 250.00,
+            "counterparty_institution": "003",
+            "counterparty_transit": "12345",
+            "counterparty_account": "9876543",
+            "payee_name": "Rail Payroll",
+            "idempotency_key": format!("rail-{}", Uuid::new_v4()),
+        }))
+        .send()
+        .await
+        .unwrap();
+    let credit_status = credit.status();
+    assert!(credit_status.is_success(), "aft credit: {credit_status}");
+    let cv: Value = credit.json().await.unwrap();
+    let entry_id = Uuid::parse_str(cv["entry_id"].as_str().unwrap()).unwrap();
+    let batch_id = Uuid::parse_str(cv["batch_id"].as_str().unwrap()).unwrap();
+
+    let svc = service_token(&c).await;
+    for path in [
+        format!("aft/batches/{batch_id}/submit"),
+        format!("aft/network/settle/{batch_id}"),
+    ] {
+        let r = c
+            .post(format!("{}/api/v1/{path}", base_url()))
+            .bearer_auth(&svc)
+            .send()
+            .await
+            .unwrap();
+        assert!(r.status().is_success(), "{path}: {}", r.status());
+    }
+
+    let link = fraud_link_rail(&c, &svc, "aft", entry_id).await;
+    assert_eq!(link.status().as_u16(), 200);
+    let op_id = link.json::<Value>().await.unwrap()["operation_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("settled aft entry must resolve"))
+        .to_string();
+    assert_engine_decision_exists(&c, &op_id).await;
+}
+
+/// An unknown rail name is a client error, distinct from an unknown id.
+#[tokio::test]
+async fn rail_fraud_link_400_for_an_unknown_rail() {
+    let c = client();
+    require_stack!(&c);
+    let svc = service_token(&c).await;
+    let r = fraud_link_rail(&c, &svc, "cards", Uuid::new_v4()).await;
+    assert_eq!(r.status().as_u16(), 400, "unknown rail is a 400");
+}
+
+/// An unknown rail id (or one whose money row isn't written yet) is a 404.
+#[tokio::test]
+async fn rail_fraud_link_404_for_an_unknown_id() {
+    let c = client();
+    require_stack!(&c);
+    let svc = service_token(&c).await;
+    let r = fraud_link_rail(&c, &svc, "interac", Uuid::new_v4()).await;
+    assert_eq!(r.status().as_u16(), 404, "unknown rail id is a 404");
+}
+
+/// Shared: the resolved operation_id must name a real row in the engine's
+/// `decisions` table — a valid-but-wrong id is worse than a null.
+async fn assert_engine_decision_exists(_c: &reqwest::Client, op_id: &str) {
+    let Some(engine) = engine_db().await else {
+        return;
+    };
+    let seen: i64 = sqlx::query_scalar("SELECT count(*) FROM decisions WHERE operation_id = $1")
+        .bind(Uuid::parse_str(op_id).unwrap())
+        .fetch_one(&engine)
+        .await
+        .unwrap();
+    assert_eq!(seen, 1, "operation_id {op_id} must name a real engine decision");
+}

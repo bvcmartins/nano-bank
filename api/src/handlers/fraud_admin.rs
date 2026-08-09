@@ -53,6 +53,10 @@ pub fn fraud_admin_routes() -> Router<AppState> {
             "/admin/transactions/:transaction_id/fraud-link",
             get(fraud_link),
         )
+        .route(
+            "/admin/rails/:rail/:rail_id/fraud-link",
+            get(fraud_link_rail),
+        )
 }
 
 /// The engine's identifiers for one money row, where the bank persisted them.
@@ -100,44 +104,52 @@ struct FraudLinkResponse {
 /// | Never screened (`backend = "off"`) | nulls | nothing to reach |
 /// | **Screened, link not persisted** | **nulls** | **no — but a decision exists** |
 ///
-/// The third row is the trap. Interac, AFT, Lynx and card movements *do* create
-/// `transactions` rows (`rails/common.rs::new_txn`, `cards.rs`) and *do* call
-/// `fraud::gate::screen()` — they simply write `metadata` without a `fraud` key,
-/// so the linkage is never stored. Their decisions are real, may be **blocks**,
-/// and are unreachable through this endpoint.
+/// The third row was the trap while it lasted. It no longer applies to the
+/// bank's own paths: `transactions.rs` (deposit/withdrawal/transfer) stamp the
+/// linkage inline, and the rails (interac/lynx via #53, aft via #57, cards via
+/// #56) now carry it onto their money row too. So for a transaction the bank
+/// wrote and screened, a null here means "not screened", not "not written down".
 ///
-/// So: **a null is not evidence that no decision exists.** A consumer that reads
-/// it that way — the label pipeline especially — will treat screened traffic as
-/// unscreened and silently under-count, which is the same blindness #46 was
-/// filed over.
+/// It survives only for a caller holding a **rail** id (`etransfer_id`,
+/// `wire_id`, an aft `entry_id`) rather than the money `transaction_id`: this
+/// route can't take those. [`fraud_link_rail`] does — it maps the rail id to the
+/// money row and then reads exactly what this route reads.
 ///
-/// The two null states are not distinguishable here, and deliberately are not
-/// guessed at: the bank records nowhere whether a movement was screened, so any
-/// discriminator would be an inference dressed as a contract. Sniffing
-/// `metadata->'rail'` is the tempting one and it is wrong — card transactions
-/// carry no `rail` key, so they would be misreported as never screened.
-/// Recording the fact properly is #52 (stamp `metadata.fraud` in `new_txn` and
-/// `cards.rs`); until then this endpoint is complete for `transactions.rs`
-/// paths — deposit, withdrawal, transfer — and honest about the rest.
+/// Even so, **a null is not proof no decision exists** in the general case: a
+/// screening that ran with `backend = "off"` writes no `fraud` key, and the bank
+/// records nowhere whether a movement was screened, so the two null states
+/// aren't distinguished here and deliberately aren't guessed at.
 async fn fraud_link(
     State(state): State<AppState>,
     Path(transaction_id): Path<Uuid>,
     _svc: AuthenticatedService,
 ) -> Result<Json<FraudLinkResponse>, AppError> {
+    fraud_link_for(&state.pool, transaction_id)
+        .await?
+        .map(Json)
+        .ok_or_else(|| AppError::NotFound("transaction not found".to_string()))
+}
+
+/// Read the engine linkage off a money row's `metadata.fraud`. `Ok(None)` means
+/// no such transaction (the caller renders a 404); `Ok(Some(_))` is a 200, with
+/// nulls when the row carries no `fraud` key. Shared by the transaction route
+/// ([`fraud_link`]) and the rail route ([`fraud_link_rail`]) so both answer
+/// identically once a `transaction_id` is in hand.
+async fn fraud_link_for(
+    pool: &DatabasePool,
+    transaction_id: Uuid,
+) -> Result<Option<FraudLinkResponse>, AppError> {
     // `metadata` is nullable, so the outer Option is "no such transaction" and
-    // the inner one is "transaction exists, metadata NULL". Only the former is a
-    // 404.
-    let metadata: Option<serde_json::Value> =
+    // the inner one is "transaction exists, metadata NULL".
+    let row: Option<Option<serde_json::Value>> =
         sqlx::query_scalar("SELECT metadata FROM transactions WHERE transaction_id = $1")
             .bind(transaction_id)
-            .fetch_optional(&state.pool)
-            .await?
-            .ok_or_else(|| AppError::NotFound("transaction not found".to_string()))?;
+            .fetch_optional(pool)
+            .await?;
+    let Some(metadata) = row else {
+        return Ok(None);
+    };
 
-    // No `fraud` metadata is a real answer, so it is a 200 with nulls rather
-    // than a 404 — a 404 would invite the caller to retry something that is
-    // never going to appear. But see the doc comment: nulls collapse two
-    // different states, and only one of them means "no decision".
     let fraud = metadata.as_ref().and_then(|m| m.get("fraud"));
     let uuid_at = |key: &str| -> Option<Uuid> {
         fraud
@@ -146,7 +158,7 @@ async fn fraud_link(
             .and_then(|s| s.parse().ok())
     };
 
-    Ok(Json(FraudLinkResponse {
+    Ok(Some(FraudLinkResponse {
         transaction_id,
         operation_id: uuid_at("operation_id"),
         decision_id: uuid_at("decision_id"),
@@ -155,6 +167,55 @@ async fn fraud_link(
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false),
     }))
+}
+
+/// Resolve a **rail movement's own id** to the screened decision linkage.
+///
+/// A caller that drove a rail (the fraud operator's tooling, the world-model
+/// label loop) holds the rail's id — `etransfer_id`, `wire_id`, an aft
+/// `entry_id` — not the money `transaction_id` the linkage sits on. Each rail
+/// screens once and stamps `metadata.fraud` on exactly one money row (#53/#57/
+/// #56); this maps the rail id to that row, then defers to [`fraud_link_for`],
+/// so the answer is identical to the transaction route.
+///
+/// - unknown `rail` → 400.
+/// - unknown `rail_id`, or its money row not written yet (e.g. an aft entry
+///   before settlement) → 404.
+/// - otherwise 200, with nulls when that row wasn't screened — same honest
+///   semantics as [`fraud_link`].
+///
+/// Cards are intentionally not here: they resolve through
+/// `transactions.metadata->>'auth_id'` rather than an FK column, and no consumer
+/// needs them yet.
+async fn fraud_link_rail(
+    State(state): State<AppState>,
+    Path((rail, rail_id)): Path<(String, Uuid)>,
+    _svc: AuthenticatedService,
+) -> Result<Json<FraudLinkResponse>, AppError> {
+    // The table/column is chosen from a fixed set (never caller input); `rail_id`
+    // is always a bound parameter.
+    let resolve = match rail.as_str() {
+        "interac" => "SELECT hold_transaction_id FROM interac_etransfers WHERE etransfer_id = $1",
+        "lynx" => "SELECT settlement_transaction_id FROM lynx_wires WHERE wire_id = $1",
+        "aft" => "SELECT settle_transaction_id FROM aft_entries WHERE entry_id = $1",
+        other => return Err(AppError::BadRequest(format!("unknown rail: {other}"))),
+    };
+
+    // `flatten()` collapses both "no such rail row" and "row exists but its money
+    // transaction is NULL" (unsettled) into the same 404 — neither can be linked.
+    let txn_id: Option<Uuid> = sqlx::query_scalar(resolve)
+        .bind(rail_id)
+        .fetch_optional(&state.pool)
+        .await?
+        .flatten();
+    let txn_id = txn_id.ok_or_else(|| {
+        AppError::NotFound(format!("no screened transaction for {rail} {rail_id}"))
+    })?;
+
+    fraud_link_for(&state.pool, txn_id)
+        .await?
+        .map(Json)
+        .ok_or_else(|| AppError::NotFound("transaction not found".to_string()))
 }
 
 #[derive(sqlx::FromRow)]
