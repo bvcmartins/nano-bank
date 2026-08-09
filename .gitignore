@@ -30,3 +30,6 @@ mcp/.env.demo
 HANDOFF.md
 agentic-banking-design.md
 PLAN-*.md
+
+# git worktrees created for isolated feature work
+.claude/worktrees/
