@@ -56,3 +56,51 @@ def test_compute_ratio_and_guard():
     from decimal import Decimal
     assert metrics.compute("ratio", [9, 3])["result"] == Decimal("3.0000")
     assert "error" in metrics.compute("ratio", [5])
+
+
+def _rs(name, owner, revision, desired=1, ready=1, cluster="nano-bank", ns="nano-bank"):
+    return {"cluster": cluster, "namespace": ns, "name": name,
+            "owner_deployment": owner, "revision": revision,
+            "desired": desired, "ready": ready}
+
+
+def test_rollouts_complete_progressing_stalled():
+    deps = [
+        _dep("coo", 1, 1, available=1, updated=1,
+             conditions=[{"type": "Progressing", "status": "True",
+                          "reason": "NewReplicaSetAvailable"}]),
+        _dep("cfo", 2, 1, available=1, updated=1,
+             conditions=[{"type": "Progressing", "status": "True",
+                          "reason": "ReplicaSetUpdated"}]),
+        _dep("bank-api", 2, 1, available=1, updated=1,
+             conditions=[{"type": "Progressing", "status": "False",
+                          "reason": "ProgressDeadlineExceeded"}]),
+    ]
+    rss = [_rs("coo-abc", "coo", 3), _rs("cfo-new", "cfo", 5), _rs("cfo-old", "cfo", 4)]
+    out = metrics.rollouts(deps, rss)
+    by = {d["name"]: d for d in out["deployments"]}
+    assert by["coo"]["state"] == "complete"
+    assert by["cfo"]["state"] == "progressing"
+    assert by["cfo"]["active_replicasets"] == 2
+    assert by["bank-api"]["state"] == "stalled"
+    assert out["rollup"] == {"complete": 1, "progressing": 1, "stalled": 1}
+
+
+def test_versions_flags_drift():
+    deps = [
+        _dep("coo", 1, 1, images=["nano-coo:dev"], cluster="nano-bank"),
+        _dep("coo", 1, 1, images=["nano-coo:v2"], cluster="modern-core"),
+        _dep("bank-api", 1, 1, images=["nano-bank:dev"]),
+    ]
+    out = metrics.versions(deps)
+    assert out["by_app"]["nano-coo"]["drift"] is True
+    assert out["by_app"]["nano-coo"]["tags"] == ["dev", "v2"]
+    assert out["by_app"]["nano-bank"]["drift"] is False
+    assert "nano-coo" in out["drift"]
+    assert "nano-bank" not in out["drift"]
+
+
+def test_platform_health_bundles_all_five():
+    out = metrics.platform_health([], [], [], [])
+    assert set(out) == {"estate_health", "restarts", "rollouts", "versions",
+                        "service_health"}
