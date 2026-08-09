@@ -34,6 +34,9 @@ pub struct FinanceSettings {
     /// Flat fee charged per outgoing e-transfer. Default $1.50.
     #[serde(with = "rust_decimal::serde::str", default = "default_etransfer_fee")]
     pub etransfer_fee: Decimal,
+    /// Flat fee charged per outgoing internal transfer. Default $1.50.
+    #[serde(with = "rust_decimal::serde::str", default = "default_transfer_fee")]
+    pub transfer_fee: Decimal,
     /// Monthly account-maintenance fee. Default $4.00.
     #[serde(with = "rust_decimal::serde::str", default = "default_maintenance_fee")]
     pub maintenance_fee: Decimal,
@@ -51,6 +54,9 @@ fn default_interchange_bps() -> Decimal {
 fn default_etransfer_fee() -> Decimal {
     Decimal::new(150, 2)
 }
+fn default_transfer_fee() -> Decimal {
+    Decimal::new(150, 2)
+}
 fn default_maintenance_fee() -> Decimal {
     Decimal::new(400, 2)
 }
@@ -63,6 +69,7 @@ impl Default for FinanceSettings {
         Self {
             interchange_bps: default_interchange_bps(),
             etransfer_fee: default_etransfer_fee(),
+            transfer_fee: default_transfer_fee(),
             maintenance_fee: default_maintenance_fee(),
             maintenance_waiver: default_maintenance_waiver(),
         }
@@ -75,6 +82,7 @@ impl Settings {
         crate::finance::FinanceConfig {
             interchange_bps: self.finance.interchange_bps,
             etransfer_fee: self.finance.etransfer_fee,
+            transfer_fee: self.finance.transfer_fee,
             maintenance_fee: self.finance.maintenance_fee,
             maintenance_waiver: self.finance.maintenance_waiver,
         }

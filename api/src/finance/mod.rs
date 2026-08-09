@@ -24,6 +24,7 @@ pub fn interchange_amount(purchase: Decimal, bps: Decimal) -> Decimal {
 pub struct FinanceConfig {
     pub interchange_bps: Decimal,
     pub etransfer_fee: Decimal,
+    pub transfer_fee: Decimal,
     pub maintenance_fee: Decimal,
     pub maintenance_waiver: Decimal,
 }
@@ -65,6 +66,7 @@ mod tests {
         let cfg = FinanceConfig {
             interchange_bps: dec!(150),
             etransfer_fee: dec!(1.50),
+            transfer_fee: dec!(1.50),
             maintenance_fee: dec!(4.00),
             maintenance_waiver: dec!(3000),
         };

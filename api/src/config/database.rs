@@ -161,6 +161,15 @@ pub async fn run_migrations(pool: &DatabasePool) -> Result<(), sqlx::Error> {
         // holds written before this stay NULL, which reads correctly as "no
         // linkage recorded".
         "ALTER TABLE account_holds ADD COLUMN IF NOT EXISTS metadata JSONB",
+        // Transfer idempotency guard (canonical DDL in 04_transactions.sql). Closes
+        // the find-then-insert race: a concurrent same-key transfer trips this unique
+        // index instead of double-posting the transfer + its fee. NULLS NOT DISTINCT
+        // (PG16) collapses the no-mandate case; partial so the `fee` row and
+        // non-idempotent transfers are excluded.
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_transfer_idempotency \
+         ON transactions (initiated_by, (metadata->>'idempotency_key'), (metadata->>'mandate_id')) \
+         NULLS NOT DISTINCT \
+         WHERE transaction_type = 'transfer' AND (metadata->>'idempotency_key') IS NOT NULL",
         // Phase 3: step-up pending approvals.
         r#"
         CREATE TABLE IF NOT EXISTS pending_approvals (
