@@ -31,5 +31,6 @@ HANDOFF.md
 agentic-banking-design.md
 PLAN-*.md
 
-# local python venv for tests
+# local python venv for tests (dir or a symlink to another worktree's venv)
 .venv/
+.venv
