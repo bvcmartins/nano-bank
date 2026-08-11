@@ -17,8 +17,8 @@ MC_CTX=kind-modern-core
 OUT=$(mktemp -d)/kubeconfig
 : > "$OUT"
 
-mint() {                        # $1=context  $2=kind-node-container
-  local ctx="$1" node="$2"
+mint() {                        # $1=context  $2=kind-node-container  $3=cluster-label
+  local ctx="$1" node="$2" cluster_label="$3"
   echo "🔐 minting platform-reader in $ctx (node $node)..."
   kubectl --context "$ctx" apply -f rbac.yaml >/dev/null
   # A long-lived token for the SA (k8s >=1.24 needs an explicit request).
@@ -35,10 +35,24 @@ mint() {                        # $1=context  $2=kind-node-container
   KUBECONFIG="$OUT" kubectl config set "clusters.$ctx.certificate-authority-data" "$ca" >/dev/null
   KUBECONFIG="$OUT" kubectl config set-credentials "platform-reader@$ctx" --token="$token" >/dev/null
   KUBECONFIG="$OUT" kubectl config set-context "$ctx" --cluster="$ctx" --user="platform-reader@$ctx" >/dev/null
+
+  # --- write-scoped actor SA (Phase B) ---
+  # Its patch on deployments is restricted by resourceNames (per-cluster
+  # allow-list); the CTO's k8s_writer authenticates as this SA via the
+  # "<ctx>-actor" context.
+  local actor_rbac="rbac-actor-${cluster_label}.yaml"
+  echo "🔐 minting platform-actor in $ctx ($actor_rbac)..."
+  kubectl --context "$ctx" apply -f "$actor_rbac" >/dev/null
+  local atoken
+  atoken=$(kubectl --context "$ctx" -n kube-system create token platform-actor --duration=8760h)
+  KUBECONFIG="$OUT" kubectl config set-cluster "${ctx}-actor" --server="$server" >/dev/null
+  KUBECONFIG="$OUT" kubectl config set "clusters.${ctx}-actor.certificate-authority-data" "$ca" >/dev/null
+  KUBECONFIG="$OUT" kubectl config set-credentials "platform-actor@$ctx" --token="$atoken" >/dev/null
+  KUBECONFIG="$OUT" kubectl config set-context "${ctx}-actor" --cluster="${ctx}-actor" --user="platform-actor@$ctx" >/dev/null
 }
 
-mint "$NB_CTX" nano-bank-control-plane
-mint "$MC_CTX" modern-core-control-plane
+mint "$NB_CTX" nano-bank-control-plane nano-bank
+mint "$MC_CTX" modern-core-control-plane modern-core
 KUBECONFIG="$OUT" kubectl config use-context "$NB_CTX" >/dev/null
 
 echo "📦 storing Secret nano-platform-kubeconfig in $NB_CTX/nano-bank..."

@@ -18,6 +18,11 @@ spec:
         env:
         - { name: MCP_PORT,        value: "8094" }
         - { name: KUBECONFIG_PATH, value: /etc/platform/kubeconfig }
+        # Phase B — infra levers audit to the bank ledger endpoint (service-authed).
+        - { name: NANO_BANK_API,   value: http://bank-api:8081 }
+        - name: SERVICE_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef: { name: nano-agent-secrets, key: SERVICE_CLIENT_SECRET }
         volumeMounts:
         - name: kubeconfig
           mountPath: /etc/platform

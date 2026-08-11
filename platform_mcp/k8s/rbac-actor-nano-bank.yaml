@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: platform-actor
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: platform-actor
+  namespace: nano-bank
+rules:
+# Reading replicasets (for rollback target templates) is low-risk, unrestricted.
+- apiGroups: ["apps"]
+  resources: ["replicasets"]
+  verbs: ["get", "list"]
+# The dangerous verb — patch — is restricted by name to the allow-listed apps.
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "patch"]
+  resourceNames: ["bank-api", "coo", "cfo", "operations-mcp", "finance-mcp"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: platform-actor
+  namespace: nano-bank
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: platform-actor
+subjects:
+- kind: ServiceAccount
+  name: platform-actor
+  namespace: kube-system
