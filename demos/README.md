@@ -13,10 +13,11 @@ per subdirectory.
 | 4 | External mandated agent | `04-external-agent/` | An **autonomous LLM agent** operating a customer's bank **only through the agentic branch** (`/agent-gateway/*`), under a customer-granted **mandate** (scoped, capped, revocable): a high-level instruction → plan → mandate-gated acts (bill payment to Epcor) + A2A to the manager, with a Revoke button. |
 | 5 | Agent COO | `05-coo/` | The **Chief Operating Officer** agent (read-only operational analyst): a narrated 7-beat arc — grounded operational review with planning + a subagent rail deep-dive, a derived figure via the compute tool, durable memory recalled in a fresh thread, scope refusals, and a caveated float. Ships a one-command in-cluster runner + a live console. See `05-coo/README.md`. |
 | 6 | Agent CFO | `06-cfo/` | The **Chief Financial Officer** agent (read-only financial analyst on the same `csuite` harness): a 7-beat arc — grounded period review with planning + a subagent segment deep-dive, a cost-to-income ratio via compute, durable memory, refusing an unverifiable NPL premise, scope discipline (operations are the COO's), and period discipline (no fabricated quarter). One-command runner + live console. See `06-cfo/README.md`. |
+| 8 | Agent CTO | `08-cto/` | The **Chief Technology Officer** agent (platform analyst + operator on the `csuite` harness): an 8-beat arc across BOTH kind clusters — grounded reliability/delivery review with planning + a subagent deep-dive, a degraded-share figure via compute, durable memory, scope discipline (the books are the CFO's), a **restart refused** on a healthy target (the self-verify guardrail), and an **autonomous rollback** that genuinely recovers a staged bad rollout on `cfo` — every action audited in the tamper-evident ledger. One-command runner + live console. See `08-cto/README.md`. |
 
 _More demos ahead (each gets its own numbered `demos/NN-<name>/`)._
 
-Demos 5–6 are a different shape from 1–4: not a single `app.py` over the bank API
+Demos 5–6 and 8 are a different shape from 1–4: not a single `app.py` over the bank API
 but a narrated `/ask` driver (`NN-<agent>/run-demo.sh` → `drive.py`, sharing
 `demos/_driver.py`) plus the agent console
 (`coo/console.py`). Its README carries the full runbook and question sheet.
