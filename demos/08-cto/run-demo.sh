@@ -38,11 +38,14 @@ done
 
 PF_PIDS=()
 restore_victim() {
-  # Idempotent: remove the bad command patch if it is still there. On a clean
-  # run beat 7's rollback already recovered cfo; this is the abort safety net.
+  # Idempotent: remove the bad command patch if it is still there and reset the
+  # progress deadline. On a clean run beat 7's rollback already recovered cfo
+  # (removing the command); this is the abort safety net.
   kubectl --context "$CTX" -n "$NS" patch deploy/"$VICTIM" --type=json \
     -p='[{"op":"remove","path":"/spec/template/spec/containers/0/command"}]' \
     >/dev/null 2>&1 || true
+  kubectl --context "$CTX" -n "$NS" patch deploy/"$VICTIM" --type=merge \
+    -p='{"spec":{"progressDeadlineSeconds":600}}' >/dev/null 2>&1 || true
 }
 cleanup() {
   for pid in "${PF_PIDS[@]:-}"; do kill "$pid" 2>/dev/null || true; done
@@ -85,13 +88,35 @@ wait_http http://localhost:8081/health "bank-api"
 wait_http http://localhost:8095/livez  "cto"
 
 if [ "$DO_BREAK" = "1" ]; then
-  echo "💥 staging a bad rollout on $VICTIM (command → /bin/false) so the CTO has a real incident ..."
+  echo "💥 staging a bad rollout on $VICTIM so the CTO has a real incident ..."
+  # 1) Start from a known-good deployment: drop any stale bad command and restore
+  #    the normal progress deadline, then stamp a FRESH good revision (a unique
+  #    pod-template annotation). That guarantees the immediate prior revision the
+  #    rollback lever targets (second-highest) is this known-good one — robust
+  #    even if earlier runs left an alternating good/bad revision history.
+  restore_victim
+  kubectl --context "$CTX" -n "$NS" rollout status deploy/"$VICTIM" --timeout=120s || true
+  kubectl --context "$CTX" -n "$NS" patch deploy/"$VICTIM" --type=merge \
+    -p='{"spec":{"template":{"metadata":{"annotations":{"demo.nano-bank/staged-good":"'"$(date +%s)"'"}}}}}'
+  kubectl --context "$CTX" -n "$NS" rollout status deploy/"$VICTIM" --timeout=120s || true
+  # 2) Break it: shorten the progress deadline so the bad rollout genuinely STALLS
+  #    in seconds (a real ProgressDeadlineExceeded) instead of the 10-minute
+  #    default — that stall is exactly the precondition the rollback lever
+  #    re-verifies live. progressDeadlineSeconds is a spec field (not part of the
+  #    pod template), so only the /bin/false patch creates the new (bad) revision.
+  kubectl --context "$CTX" -n "$NS" patch deploy/"$VICTIM" --type=merge \
+    -p='{"spec":{"progressDeadlineSeconds":25}}'
   kubectl --context "$CTX" -n "$NS" patch deploy/"$VICTIM" --type=json \
     -p='[{"op":"add","path":"/spec/template/spec/containers/0/command","value":["/bin/false"]}]'
-  # Let it become observably degraded (a stalled rollout with a healthy prior revision).
-  kubectl --context "$CTX" -n "$NS" rollout status deploy/"$VICTIM" --timeout=40s || true
   # Ensure the abort safety net is armed even though beat 7 should recover it.
   trap 'restore_victim; cleanup' EXIT
+  echo "⏳ waiting for the rollout to stall (ProgressDeadlineExceeded) ..."
+  for _ in $(seq 1 40); do
+    reason=$(kubectl --context "$CTX" -n "$NS" get deploy/"$VICTIM" \
+      -o jsonpath='{.status.conditions[?(@.type=="Progressing")].reason}' 2>/dev/null || true)
+    if [ "$reason" = "ProgressDeadlineExceeded" ]; then echo "   stalled ✓"; break; fi
+    sleep 3
+  done
 fi
 
 # Drive the narrated arc. The driver only speaks HTTP to the CTO, so it needs
@@ -117,4 +142,8 @@ CTX="$CTX" NS="$NS" demos/08-cto/inspect-ledger.sh
 # Make sure cfo is healthy again after the demo (rollback should have done it).
 echo
 echo "🩺 final $VICTIM state ..."
+# Reset the demo's short progress deadline before the health check so it reflects
+# normal operational config (the EXIT trap also does this on an aborted run).
+kubectl --context "$CTX" -n "$NS" patch deploy/"$VICTIM" --type=merge \
+  -p='{"spec":{"progressDeadlineSeconds":600}}' >/dev/null 2>&1 || true
 kubectl --context "$CTX" -n "$NS" rollout status deploy/"$VICTIM" --timeout=120s || true

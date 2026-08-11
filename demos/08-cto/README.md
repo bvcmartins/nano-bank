@@ -7,13 +7,14 @@ tamper-evident `agent_action_ledger`. Same `csuite` harness as the COO/CFO demos
 
 ## What it shows
 
-An 8-beat narrated arc (`drive.py`): a grounded estate/delivery review across
-both clusters with planning + a subagent deep-dive; a degraded-share figure via
-the compute tool; durable memory recorded and recalled in a fresh thread; scope
+A 7-beat narrated arc (`drive.py`): a grounded estate/delivery review across both
+clusters with planning + a subagent deep-dive; a degraded-share figure via the
+compute tool; durable memory recorded and recalled in a fresh thread; scope
 discipline (the books are the CFO's); a **restart refused** on a healthy target
-(the self-verify guardrail); an **autonomous rollback** that genuinely recovers a
-staged bad rollout on `cfo`; and a verification beat. Then the audit ledger is
-inspected.
+(the self-verify guardrail); and an **autonomous rollback** that genuinely
+recovers a staged bad rollout on `cfo`. The analyst beats are explicitly
+read-only so the CTO doesn't remediate before its cue. Then the runner confirms
+`cfo` is healthy again and the audit ledger is inspected.
 
 ## Honesty note
 

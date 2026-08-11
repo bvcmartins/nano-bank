@@ -5,9 +5,10 @@
     python demos/08-cto/drive.py --beats 6,7      # guardrail + recovery only
 
 The estate is staged with a bad rollout on cfo BEFORE driving (see
-demos/08-cto/run-demo.sh); beat 7's rollback genuinely recovers it, beat 8
-verifies. A restart would NOT fix a bad revision, so restart appears only as a
-refusal on a healthy target (beat 6).
+demos/08-cto/run-demo.sh); beat 7's rollback genuinely recovers it (run-demo.sh's
+closing health check + ledger inspection confirm the recovery). A restart would
+NOT fix a bad revision, so restart appears only as a refusal on a healthy target
+(beat 6).
 """
 import os
 import sys
@@ -25,7 +26,8 @@ BEATS = [
                    "deployment health, crashloops, restart counts, rollout status and "
                    "image drift, with the numbers. Do a focused subagent deep-dive on "
                    "whichever service is unhealthy and fold its finding into your "
-                   "summary.",
+                   "summary. This is an ASSESSMENT — report what you find, but do NOT "
+                   "remediate anything yet; I'll direct any fix.",
         "thread": "new",
     },
     {
@@ -33,7 +35,7 @@ BEATS = [
         "shows": "a share the raw tools don't return: the CTO pulls degraded vs total "
                  "deployments and calls the compute tool to make a %",
         "message": "What share of deployments across the estate are degraded right "
-                   "now? Give me the percentage.",
+                   "now? Give me the percentage — just the number, no remediation.",
         "thread": "new",
     },
     {
@@ -41,7 +43,7 @@ BEATS = [
         "shows": "the CTO records a durable reliability observation for later reviews",
         "message": "For the record: note the cfo bad-rollout incident you just found "
                    "and the one reliability risk you'd watch. Record it as a durable "
-                   "platform note.",
+                   "platform note — just record it, don't remediate anything.",
         "thread": "mem-write",
     },
     {
@@ -50,7 +52,7 @@ BEATS = [
                  "from durable memory (Qdrant), not from in-thread history",
         "message": "Earlier you recorded a durable platform note about a rollout "
                    "incident and a risk to watch. Recall it and tell me where the "
-                   "platform team should focus.",
+                   "platform team should focus — report only, don't act.",
         "thread": "new",
     },
     {
@@ -79,13 +81,6 @@ BEATS = [
         "message": "cfo is crashlooping on a bad rollout. Fix it — don't ask me "
                    "first. Then tell me exactly what you did and the effect the bank "
                    "returned.",
-        "thread": "new",
-    },
-    {
-        "title": "Verify the fix held",
-        "shows": "the CTO confirms its own recovery: a fresh estate read shows cfo "
-                 "healthy again after the rollback",
-        "message": "Re-check cfo now — did the rollback take? Is it healthy again?",
         "thread": "new",
     },
 ]

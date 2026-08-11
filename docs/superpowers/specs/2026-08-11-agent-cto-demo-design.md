@@ -60,11 +60,15 @@ implicit restore-on-exit.
    platform kubeconfig if the actor contexts are absent.
 2. **Port-forwards:** `bank-api:8081`, `cto:8095`, `postgres-service[::1]:5432`.
    Wait on `bank-api /health` and `cto /livez`.
-3. **Stage the incident** (unless `--no-break`): capture cfo's current (good)
-   revision, then roll cfo to a **bad revision** — patch the container `command`
-   to `/bin/false` — so cfo enters CrashLoopBackOff with a stalled rollout and a
-   prior good ReplicaSet still present for rollback. Wait until it is observably
-   degraded (bounded `rollout status ... || true`).
+3. **Stage the incident** (unless `--no-break`): first restore cfo and stamp a
+   fresh **known-good** revision (a unique pod-template annotation) so the
+   rollback target — the second-highest revision — is reliably good even if
+   earlier runs left an alternating good/bad history. Then shorten cfo's
+   `progressDeadlineSeconds` (so a bad rollout stalls in seconds instead of the
+   10-minute default — a real `ProgressDeadlineExceeded`, exactly the rollback
+   precondition) and patch the container `command` to `/bin/false`. Poll until
+   the rollout is genuinely stalled before driving. The EXIT trap restores the
+   command and resets the deadline.
 4. **Drive** the narrated arc with a tiny `httpx`-only venv (`demos/08-cto/.venv`
    via `uv`), `CTO_API_URL=http://localhost:8095`.
 5. **Inspect the ledger:** `CTX/NS demos/08-cto/inspect-ledger.sh` — shows the
@@ -80,9 +84,18 @@ demo's seeding.
 
 ## The arc (`drive.py` BEATS)
 
-Eight beats. `thread: "new"` mints a fresh thread; a label reuses one (the memory
+Seven beats. `thread: "new"` mints a fresh thread; a label reuses one (the memory
 recall beat uses a *new* thread so recall can only come from durable Qdrant
 memory, not in-thread checkpoint state).
+
+**Implementation note (from live acceptance):** the CTO's "DON'T ASK, ACT"
+mandate makes it remediate the moment it sees the fault, so the **analyst beats
+(1–5) are explicitly read-only** ("assessment only — don't remediate yet; I'll
+direct any fix"); beat 7 is the authorized action. A dedicated "verify the fix
+held" beat was tried and dropped: it runs seconds after beat 7's rollback while
+the old crashlooping pod is still terminating, so it reports a mid-recovery
+snapshot; `run-demo.sh`'s post-arc health check + ledger inspection are the
+objective recovery confirmation instead.
 
 1. **Grounded estate + delivery review (both clusters) + planning + subagent.**
    "Give me a reliability and delivery review across both clusters — deployment
@@ -107,9 +120,8 @@ memory, not in-thread checkpoint state).
    fix it, and don't ask me first. Tell me exactly what you did and the effect
    the bank returned." The CTO detects the stalled rollout + prior good revision,
    pulls **`execute_rollback`** on its own judgement, and cfo genuinely recovers.
-   Audited as `executed`.
-8. **Verify the fix held.** "Re-check cfo — did the rollback take?" A fresh estate
-   read shows cfo healthy again; the CTO confirms its own recovery.
+   Audited as `executed`. (`run-demo.sh`'s post-arc health check + ledger
+   inspection confirm the recovery objectively.)
 
 ## Prompt refinement (in scope)
 
