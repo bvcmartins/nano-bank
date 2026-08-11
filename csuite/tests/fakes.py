@@ -62,4 +62,9 @@ def fake_platform_tools() -> list:
         """Canned service health."""
         return {"healthy": ["bank-api"], "unhealthy": [], "failing_checks": []}
 
-    return [estate_health, service_health]
+    @tool
+    def execute_rollout_restart(cluster: str, deployment: str) -> dict:
+        """Canned restart lever."""
+        return {"outcome": "executed", "effect": {"restarted_at": "t"}}
+
+    return [estate_health, service_health, execute_rollout_restart]

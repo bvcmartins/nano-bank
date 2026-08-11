@@ -45,3 +45,17 @@ def test_books_question_is_flagged_by_claims_and_revised(monkeypatch):
                                     memory=SafeMemory(None)))
     assert out["verification"]["revised"] is True
     assert out["verification"]["unsupported_claims"] == []
+
+
+def test_cto_pulls_a_lever_when_warranted(monkeypatch):
+    model = FakeChatModel([
+        {"tool": "estate_health", "args": {}},
+        {"tool": "execute_rollout_restart",
+         "args": {"cluster": "nano-bank", "deployment": "coo"}},
+        {"text": "Restarted coo; the bank returned executed (restarted_at t)."},
+    ])
+    _patch(monkeypatch, model)
+    out = asyncio.run(agent_mod.ask(_settings(), "coo is crashlooping, handle it",
+                                    memory=SafeMemory(None)))
+    assert any(e.get("name") == "execute_rollout_restart" for e in out["trace"])
+    assert "executed" in out["answer"]
