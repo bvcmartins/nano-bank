@@ -12,6 +12,7 @@ from .config import Settings
 from .k8s_client import K8sClient
 from .health_client import HealthClient
 from . import metrics
+from . import levers
 
 
 def _stringify(obj):
@@ -24,7 +25,72 @@ def _stringify(obj):
     return obj
 
 
-def build_mcp(k8s, health) -> FastMCP:
+# --- Autonomous infra levers (Phase B) ---------------------------------------
+# Module-level so they are unit-testable without the FastMCP wrapper. Each is
+# verify -> act -> audit: allow-list, then a LIVE re-read of k8s to re-check a
+# deterministic precondition, then the write, then a LOUD audit (an audit failure
+# after a successful act raises — the operator sees an un-audited action and
+# reconciles). A refusal (not allow-listed, not found, precondition false) is
+# also audited: the attempt is a fact.
+def _find(deployments, cluster, name):
+    for d in deployments:
+        if d.get("cluster") == cluster and d.get("name") == name:
+            return d
+    return None
+
+
+def _refused(reason):
+    return {"outcome": "refused", "reason": reason}
+
+
+def _executed(effect):
+    return {"outcome": "executed", "effect": effect}
+
+
+def _do_restart(k8s, writer, audit, settings, cluster, deployment):
+    params = {"cluster": cluster, "deployment": deployment}
+    if not levers.is_allowed(settings.allow_list, cluster, deployment):
+        outcome = _refused(f"{cluster}/{deployment} is not in the CTO action allow-list")
+        audit.post_action("rollout_restart", params, outcome)
+        return outcome
+    dep = _find(k8s.deployments(), cluster, deployment)   # LIVE re-read
+    if dep is None:
+        outcome = _refused(f"{cluster}/{deployment} not found")
+        audit.post_action("rollout_restart", params, outcome)
+        return outcome
+    if not levers.restart_warranted(dep, k8s.pods(), settings.restart_threshold):
+        outcome = _refused(f"{deployment} is not crashlooping or unready; restart unwarranted")
+        audit.post_action("rollout_restart", params, outcome)
+        return outcome
+    effect = writer.rollout_restart(cluster, deployment)   # act
+    outcome = _executed(effect)
+    audit.post_action("rollout_restart", params, outcome)  # loud audit
+    return outcome
+
+
+def _do_rollback(k8s, writer, audit, settings, cluster, deployment):
+    params = {"cluster": cluster, "deployment": deployment}
+    if not levers.is_allowed(settings.allow_list, cluster, deployment):
+        outcome = _refused(f"{cluster}/{deployment} is not in the CTO action allow-list")
+        audit.post_action("rollback", params, outcome)
+        return outcome
+    dep = _find(k8s.deployments(), cluster, deployment)
+    if dep is None:
+        outcome = _refused(f"{cluster}/{deployment} not found")
+        audit.post_action("rollback", params, outcome)
+        return outcome
+    ok, target = levers.rollback_warranted(dep, k8s.replicasets())
+    if not ok:
+        outcome = _refused(f"{deployment} rollout is not stalled with a prior revision")
+        audit.post_action("rollback", params, outcome)
+        return outcome
+    effect = writer.rollback(cluster, deployment, target)
+    outcome = _executed(effect)
+    audit.post_action("rollback", params, outcome)
+    return outcome
+
+
+def build_mcp(k8s, health, writer=None, audit=None, settings=None) -> FastMCP:
     mcp = FastMCP(
         "nano-platform",
         transport_security=TransportSecuritySettings(
@@ -77,6 +143,23 @@ def build_mcp(k8s, health) -> FastMCP:
         percent, values=[degraded, total])."""
         return _stringify(metrics.compute(operation, values))
 
+    # Acting tools are registered only when the write path is wired (writer +
+    # audit + settings). Phase A's build_mcp(k8s, health) stays read-only.
+    if writer is not None and audit is not None and settings is not None:
+        @mcp.tool()
+        def execute_rollout_restart(cluster: str, deployment: str) -> dict:
+            """Restart a stateless app deployment's pods (rolling). REFUSED unless
+            it is actually crashlooping/unready right now and on the CTO action
+            allow-list. Autonomous + audited; report the outcome verbatim."""
+            return _stringify(_do_restart(k8s, writer, audit, settings, cluster, deployment))
+
+        @mcp.tool()
+        def execute_rollback(cluster: str, deployment: str) -> dict:
+            """Roll a stateless app deployment back to its prior revision. REFUSED
+            unless its rollout is actually stalled with a prior revision and it is
+            on the allow-list. Autonomous + audited; report the outcome verbatim."""
+            return _stringify(_do_rollback(k8s, writer, audit, settings, cluster, deployment))
+
     return mcp
 
 
@@ -84,7 +167,11 @@ def main():
     settings = Settings.from_env()
     k8s = K8sClient(settings)
     health = HealthClient(settings)
-    mcp = build_mcp(k8s, health)
+    from .k8s_writer import K8sWriter
+    from .audit import LedgerAudit
+    writer = K8sWriter(settings)
+    audit = LedgerAudit(settings)
+    mcp = build_mcp(k8s, health, writer=writer, audit=audit, settings=settings)
     import uvicorn
     uvicorn.run(mcp.streamable_http_app(), host="0.0.0.0", port=settings.mcp_port)
 
