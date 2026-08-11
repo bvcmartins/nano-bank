@@ -59,3 +59,20 @@ def test_cto_pulls_a_lever_when_warranted(monkeypatch):
                                     memory=SafeMemory(None)))
     assert any(e.get("name") == "execute_rollout_restart" for e in out["trace"])
     assert "executed" in out["answer"]
+
+
+def test_cto_rolls_back_a_bad_revision(monkeypatch):
+    # A stalled rollout on a bad revision must drive execute_rollback (not
+    # restart — a restart re-runs the same broken spec).
+    model = FakeChatModel([
+        {"tool": "estate_health", "args": {}},
+        {"tool": "execute_rollback",
+         "args": {"cluster": "nano-bank", "deployment": "cfo"}},
+        {"text": "Rolled cfo back to the last good revision (executed)."},
+    ])
+    _patch(monkeypatch, model)
+    out = asyncio.run(agent_mod.ask(_settings(),
+                                    "cfo is crashlooping on a bad rollout — fix it",
+                                    memory=SafeMemory(None)))
+    assert any(e.get("name") == "execute_rollback" for e in out["trace"])
+    assert "executed" in out["answer"]

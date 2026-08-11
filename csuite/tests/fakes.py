@@ -67,4 +67,11 @@ def fake_platform_tools() -> list:
         """Canned restart lever."""
         return {"outcome": "executed", "effect": {"restarted_at": "t"}}
 
-    return [estate_health, service_health, execute_rollout_restart]
+    @tool
+    def execute_rollback(cluster: str, deployment: str) -> dict:
+        """Canned rollback lever."""
+        return {"outcome": "executed",
+                "effect": {"rolled_back_to": 5}}
+
+    return [estate_health, service_health, execute_rollout_restart,
+            execute_rollback]
