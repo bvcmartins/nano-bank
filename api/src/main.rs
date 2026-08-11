@@ -207,6 +207,10 @@ async fn create_router(pool: config::database::DatabasePool, settings: &Settings
             "/api/v1/ops-levers",
             handlers::ops_levers::ops_lever_routes(),
         )
+        .nest(
+            "/api/v1/agent-ledger",
+            handlers::agent_ledger::agent_ledger_routes(),
+        )
         // Transaction routes
         .nest(
             "/api/v1/transactions",
