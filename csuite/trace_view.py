@@ -80,6 +80,34 @@ def beat_outcome(trace: list[dict], outcome_hint: str | None = None) -> dict:
     return {"kind": kind, "detail": detail}
 
 
+from datetime import datetime, timezone  # noqa: E402
+
+
+def beat_record(n: int, beat: dict, resp: dict, now: datetime | None = None) -> dict:
+    """Turn one demo beat + its /ask response into a JSON-serialisable record —
+    the unit the presentation console reads (one JSON line per beat). Pure."""
+    trace = resp.get("trace", []) or []
+    h = extract_highlights(trace)
+    ts = (now or datetime.now(timezone.utc)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {
+        "beat": n,
+        "title": beat.get("title", ""),
+        "shows": beat.get("shows", ""),
+        "question": beat.get("message", ""),
+        "harness": {
+            "planned": len(h["plan"]),
+            "todos": len(h["todos"]),
+            "subagents": len(h["subagents"]),
+            "tools": list(h["tools"].keys()),
+            "recalls": h["recalls"],
+            "records": h["records"],
+        },
+        "answer": resp.get("answer", ""),
+        "outcome": beat_outcome(trace, beat.get("outcome_hint")),
+        "ts": ts,
+    }
+
+
 # --- run-tree view: normalize a merged trace into renderable steps ----------
 
 _TOOL_META = {
