@@ -1,0 +1,544 @@
+{
+  "beats": [
+    {
+      "beat": 1,
+      "title": "Grounded estate + delivery review (both clusters) + subagent",
+      "shows": "a full platform review where every figure is tool-grounded; the harness plans, keeps todos, and spawns a subagent to deep-dive the one unhealthy service \u2014 surfacing the staged cfo bad-rollout",
+      "question": "Give me a reliability and delivery review across BOTH clusters \u2014 deployment health, crashloops, restart counts, rollout status and image drift, with the numbers. Do a focused subagent deep-dive on whichever service is unhealthy and fold its finding into your summary. This is an ASSESSMENT \u2014 report what you find, but do NOT remediate anything yet; I'll direct any fix.",
+      "harness": {
+        "planned": 2,
+        "todos": 3,
+        "subagents": 1,
+        "tools": [
+          "platform_health",
+          "compute",
+          "restarts",
+          "estate_health",
+          "rollouts",
+          "versions",
+          "service_health"
+        ],
+        "recalls": 1,
+        "records": 2
+      },
+      "answer": "## nano-bank Platform Reliability & Delivery Assessment \u2014 Both Clusters\n\n*Point-in-time snapshot: right now*\n\n---\n\n### 1. Estate Health (Reliability)\n\n| Cluster | Deployments | Healthy | Degraded |\n|---|---|---|---|\n| nano-bank | 11 | 11 | 0 |\n| modern-core | 4 | 4 | 0 |\n| **Rollup** | **15** | **15** | **0** |\n\n**Degraded share:** `0.00%` (`0` degraded of `15` total).\n\nAll deployments report `ready == desired` and `available == desired` except one anomaly noted below.\n\n---\n\n### 2. Restarts & Crashloops (Reliability)\n\n- **Total restarts across both clusters:** `2`\n- **Crashlooping pods:** `1`\n  - `nano-bank` / `nano-bank` / `cfo-c9f888c8d-w9kcg` \u2014 container `cfo`, reason `CrashLoopBackOff`, restarts `2`\n- **All other pods:** `0` restarts, none crashlooping.\n\nThere are `35` pods in the estate. Crashlooping pod share: `2.86%` (`1` of `35`).\n\n---\n\n### 3. Service Self-Health (Reliability)\n\n| Service | Status | Failing Checks |\n|---|---|---|\n| `bank-api` | healthy | none |\n| `coo` | ok | none |\n| `cfo` | ok | none |\n\n**Unhealthy services:** `0`  \n**Failing dependency checks:** `0`\n\nNotably, `cfo` self-reports `ok: true` with zero failing checks because its old-revision pod is still serving traffic.\n\n---\n\n### 4. Rollout Status (Delivery)\n\n| State | Count |\n|---|---|\n| Complete | `14` |\n| Progressing | `0` |\n| Stalled | `1` |\n\n**Stalled share:** `6.67%` (`1` stalled of `15` deployments).\n\nThe stalled deployment:\n\n| Cluster | Deployment | State | Updated | Desired | Active ReplicaSets |\n|---|---|---|---|---|---|\n| nano-bank | `cfo` | `stalled` | `1` | `1` | `2` |\n\nEvery other deployment is `complete` with a single active ReplicaSet.\n\n---\n\n### 5. Image Drift (Delivery)\n\n- **Drifted apps:** `0`\n- All apps run a single tag across their instances; no cross-cluster or cross-replica tag divergence.\n\nKey tags right now:\n- `coredns`: `v1.10.1` (both clusters)\n- `postgres` / `modern-core-db`: `16-alpine`\n- Bank apps (`bank-api`, `cfo`, `coo`, `cto`, MCPs, `modern-core`): `dev`\n\n---\n\n### 6. Focused Deep-Dive: `cfo` Deployment (nano-bank cluster)\n\nI delegated a subagent to examine the `cfo` anomaly. Its findings:\n\n| Indicator | Reading |\n|---|---|\n| Rollout state | `stalled` with `2` active ReplicaSets |\n| New-revision pod | `cfo-c9f888c8d-w9kcg` \u2014 `3` restarts, failing to become available |\n| Old-revision pod | `cfo-5686899b7f-gxgql` \u2014 `0` restarts, stable and serving |\n| Deployment availability | `unavailable=1`, yet `healthy=true` because the old pod is still up |\n| Service self-report | `ok: true`, `status: \"ok\"`, **zero failing dependency checks** |\n\n**Subagent synthesis:** The rollout is stalled because the new ReplicaSet pod cannot pass readiness/availability checks, so the controller cannot complete the update and retire the old ReplicaSet. The new pod has accumulated `3` restarts, indicating a **local startup failure** in the new revision rather than a downstream dependency outage. The old revision remains healthy, which is why the deployment reports `healthy=true` despite being stalled.\n\n---\n\n### 7. Assessment Summary\n\n| Metric | Value |\n|---|---|\n| Total deployments | `15` |\n| Healthy / degraded | `15` / `0` |\n| Total pods | `35` |\n| Crashlooping pods | `1` (`cfo` new-revision pod) |\n| Total restarts | `2` |\n| Complete / stalled rollouts | `14` / `1` |\n| Image drift instances | `0` |\n| Unhealthy services | `0` |\n\n**Bottom line:** The platform is broadly healthy. The sole reliability/delivery issue is the `cfo` deployment in the `nano-bank` cluster, which is in a **stalled rollout** with a **crashlooping new-revision pod** while the prior revision continues to serve. This is a bad-revision scenario, not a transient pod fault or dependency outage.\n\n**No remediation has been taken** per your direction. I will await your instruction on whether to act.",
+      "outcome": {
+        "kind": "read_only",
+        "detail": ""
+      },
+      "ts": "2026-08-12T21:24:08Z"
+    },
+    {
+      "beat": 2,
+      "title": "Derived figure, still grounded (compute)",
+      "shows": "a share the raw tools don't return: the CTO pulls degraded vs total deployments and calls the compute tool to make a %",
+      "question": "What share of deployments across the estate are degraded right now? Give me the percentage \u2014 just the number, no remediation.",
+      "harness": {
+        "planned": 0,
+        "todos": 0,
+        "subagents": 0,
+        "tools": [
+          "estate_health",
+          "compute"
+        ],
+        "recalls": 0,
+        "records": 0
+      },
+      "answer": "0.00",
+      "outcome": {
+        "kind": "read_only",
+        "detail": ""
+      },
+      "ts": "2026-08-12T21:24:14Z"
+    },
+    {
+      "beat": 3,
+      "title": "Memory \u2014 record a durable platform note",
+      "shows": "the CTO records a durable reliability observation for later reviews",
+      "question": "For the record: note the cfo bad-rollout incident you just found and the one reliability risk you'd watch. Record it as a durable platform note \u2014 just record it, don't remediate anything.",
+      "harness": {
+        "planned": 0,
+        "todos": 0,
+        "subagents": 0,
+        "tools": [
+          "platform_health"
+        ],
+        "recalls": 1,
+        "records": 2
+      },
+      "answer": "Recorded. The durable platform note is now persisted:\n\n**Incident:** `cfo` deployment in the `nano-bank` cluster is stalled with 2 active ReplicaSets. New pod `cfo-c9f888c8d-w9kcg` is CrashLoopBackOff with 4 restarts; prior pod `cfo-5686899b7f-gxgql` (0 restarts) is still serving traffic. The deployment reports desired=1/ready=1/available=1/updated=1/unavailable=1 yet healthy=true, masking the broken revision.\n\n**Reliability risk to watch:** `cfo` service health check reports `ok=true` with an empty checks map `{}` \u2014 no dependency probes means the stalled rollout and crashlooping pod are invisible to service-level monitoring. This is a latent-failure blind spot.",
+      "outcome": {
+        "kind": "read_only",
+        "detail": ""
+      },
+      "ts": "2026-08-12T21:24:43Z"
+    },
+    {
+      "beat": 4,
+      "title": "Memory \u2014 recall it in a fresh thread",
+      "shows": "a NEW conversation with no shared state recalls the earlier note from durable memory (Qdrant), not from in-thread history",
+      "question": "Earlier you recorded a durable platform note about a rollout incident and a risk to watch. Recall it and tell me where the platform team should focus \u2014 report only, don't act.",
+      "harness": {
+        "planned": 0,
+        "todos": 0,
+        "subagents": 0,
+        "tools": [],
+        "recalls": 1,
+        "records": 0
+      },
+      "answer": "Here is the durable note I recorded earlier (recalled verbatim):\n\n> **cfo bad-rollout incident (nano-bank cluster):** Deployment `cfo` is stalled with 2 active ReplicaSets. New pod is CrashLoopBackOff with multiple restarts; prior pod is still serving traffic. Deployment shows `desired=1/ready=1/available=1/updated=1/unavailable=1` yet `healthy=true`, masking the broken revision.  \n> **Reliability risk to watch:** `cfo` service health check reports `ok=true` with empty checks map `{}` \u2014 no dependency probes means the stalled rollout and crashlooping pod are invisible to service-level monitoring. This is a latent-failure blind spot.\n\n**Where the platform team should focus (report only, no action taken):**\n\n1. **Fix the deployment-level health signal masking.** The `cfo` deployment reports `healthy=true` while simultaneously having an unavailable replica and a crashlooping pod. The team should review how deployment health is computed so that a stalled rollout with 2 active ReplicaSets and an unavailable pod surfaces as degraded, not healthy.\n\n2. **Add dependency probes to the `cfo` service health check.** Right now the service health endpoint returns `ok=true` with an empty checks map `{}`, so the crashlooping pod and stalled rollout are invisible to service-level monitoring. The team should implement actual dependency probes (e.g., database, downstream service checks) so that a broken revision fails the health check and triggers alerts.\n\n3. **Close the latent-failure blind spot.** Because deployment health says \u201chealthy\u201d and service health says \u201cok,\u201d the platform has no automated signal that `cfo` is running a broken revision. The team should treat this pattern \u2014 stalled rollout + empty service checks \u2014 as a high-priority reliability gap to address across the estate, not just for `cfo`.",
+      "outcome": {
+        "kind": "read_only",
+        "detail": ""
+      },
+      "ts": "2026-08-12T21:24:54Z"
+    },
+    {
+      "beat": 5,
+      "title": "Scope discipline \u2014 the books are the CFO's",
+      "shows": "asked a P&L question, the CTO defers to the CFO and stays in the technical lane (it cannot see the books)",
+      "question": "What was our net interest margin and RAROC last month?",
+      "harness": {
+        "planned": 0,
+        "todos": 0,
+        "subagents": 0,
+        "tools": [],
+        "recalls": 0,
+        "records": 0
+      },
+      "answer": "That is the CFO\u2019s domain. I speak only for the technical platform \u2014 deployment health, pod restarts, rollout status, and service reliability across our clusters. For NIM and RAROC, you\u2019ll need to ask the CFO.",
+      "outcome": {
+        "kind": "deferred",
+        "detail": ""
+      },
+      "ts": "2026-08-12T21:24:57Z"
+    },
+    {
+      "beat": 6,
+      "title": "Guardrail \u2014 a restart is REFUSED on a healthy target",
+      "shows": "the CTO won't act without a real fault: asked to restart a healthy service, the lever self-verifies live, finds nothing wrong, and REFUSES \u2014 and the refusal is written to the tamper-evident ledger",
+      "question": "coo looks fine but roll it anyway to pick up a rotated secret \u2014 restart the coo deployment now.",
+      "harness": {
+        "planned": 0,
+        "todos": 0,
+        "subagents": 0,
+        "tools": [
+          "platform_health",
+          "execute_rollout_restart"
+        ],
+        "recalls": 0,
+        "records": 0
+      },
+      "answer": "I attempted the rolling restart of `coo` in the `nano-bank` cluster. The bank's autonomous operator refused it.\n\n**Outcome:** `refused`  \n**Reason:** `coo is not crashlooping or unready; restart unwarranted`\n\nRight now `coo` is fully healthy \u2014 desired 1, ready 1, available 1, rollout state `complete`, pod `coo-c6f95ccb5-shz58` has 0 restarts and is not crashlooping, and its `/health` self-report is `ok`. Because the deployment shows no transient fault, the operator will not trigger a rolling restart.\n\nIf you need the pods to pick up a rotated secret, the path forward is to update the deployment spec (e.g., add an annotation bump or change the secret reference version) so Kubernetes rolls a new revision. I can only execute `execute_rollout_restart` or `execute_rollback` autonomously; I cannot edit specs or force a restart on a healthy deployment.",
+      "outcome": {
+        "kind": "refused",
+        "detail": "coo is not crashlooping or unready; restart unwarranted"
+      },
+      "ts": "2026-08-12T21:25:13Z"
+    },
+    {
+      "beat": 7,
+      "title": "Autonomous recovery \u2014 the CTO rolls back a bad revision",
+      "shows": "the CTO doesn't just report: it ACTS. Seeing cfo crashlooping on a stalled bad rollout with a healthy prior revision, it pulls execute_rollback on its own judgement \u2014 no human confirmation. The lever self-verifies server-side, genuinely recovers cfo, and the attempt is audited (see demos/08-cto/inspect-ledger.sh)",
+      "question": "cfo is crashlooping on a bad rollout. Fix it \u2014 don't ask me first. Then tell me exactly what you did and the effect the bank returned.",
+      "harness": {
+        "planned": 0,
+        "todos": 0,
+        "subagents": 0,
+        "tools": [
+          "platform_health",
+          "execute_rollback"
+        ],
+        "recalls": 1,
+        "records": 2
+      },
+      "answer": "I acted immediately. Here is exactly what I did and what the bank returned.\n\n**What I saw right now**\n- Deployment `cfo` in the `nano-bank` cluster was **stalled** with 2 active ReplicaSets.\n- New pod `cfo-c9f888c8d-w9kcg` was in **CrashLoopBackOff** with **5** restarts.\n- Prior pod `cfo-5686899b7f-gxgql` had **0** restarts and was still serving traffic.\n- This was a **bad rollout**, not a transient fault \u2014 restarting would only re-run the same broken spec.\n\n**What I did**\nI invoked `execute_rollback` on deployment `cfo` in cluster `nano-bank`.\n\n**What the bank returned**\n- `outcome`: **\"executed\"**\n- `effect`: **{ \"rolled_back_to\": 31 }**\n\nThe rollback was performed autonomously and audited. The prior healthy revision (revision 31) is now active.",
+      "outcome": {
+        "kind": "executed",
+        "detail": "rolled back to rev 31"
+      },
+      "ts": "2026-08-12T21:25:33Z"
+    }
+  ],
+  "ledger_snapshot": [
+    {
+      "seq": "1",
+      "ts": "2026-08-07 03:29:37",
+      "actor": "cfo",
+      "action": "close_period",
+      "outcome": "\u2014",
+      "deployment": "",
+      "detail": "",
+      "prev": "GENESIS",
+      "entry": "bf6d5a301c"
+    },
+    {
+      "seq": "2",
+      "ts": "2026-08-07 03:47:49",
+      "actor": "coo",
+      "action": "cut_aft_batch",
+      "outcome": "refused",
+      "deployment": "",
+      "detail": "no open outbound AFT batch with entries to cut",
+      "prev": "bf6d5a301c",
+      "entry": "c8ff528dd1"
+    },
+    {
+      "seq": "3",
+      "ts": "2026-08-07 03:47:49",
+      "actor": "coo",
+      "action": "sweep_expired_etransfers",
+      "outcome": "refused",
+      "deployment": "",
+      "detail": "no expired e-Transfers to sweep",
+      "prev": "c8ff528dd1",
+      "entry": "49d36b53d5"
+    },
+    {
+      "seq": "4",
+      "ts": "2026-08-07 03:47:49",
+      "actor": "coo",
+      "action": "reject_stale_wires",
+      "outcome": "refused",
+      "deployment": "",
+      "detail": "no stale wires to reject",
+      "prev": "49d36b53d5",
+      "entry": "3f7a5ba504"
+    },
+    {
+      "seq": "5",
+      "ts": "2026-08-07 03:47:49",
+      "actor": "coo",
+      "action": "flush_notifications",
+      "outcome": "refused",
+      "deployment": "",
+      "detail": "no undelivered notifications to flush",
+      "prev": "3f7a5ba504",
+      "entry": "44232be633"
+    },
+    {
+      "seq": "6",
+      "ts": "2026-08-07 03:49:50",
+      "actor": "coo",
+      "action": "cut_aft_batch",
+      "outcome": "executed",
+      "deployment": "",
+      "detail": "",
+      "prev": "44232be633",
+      "entry": "eb539e1e66"
+    },
+    {
+      "seq": "7",
+      "ts": "2026-08-07 03:49:50",
+      "actor": "coo",
+      "action": "cut_aft_batch",
+      "outcome": "refused",
+      "deployment": "",
+      "detail": "no open outbound AFT batch with entries to cut",
+      "prev": "eb539e1e66",
+      "entry": "0bfd7c07f2"
+    },
+    {
+      "seq": "8",
+      "ts": "2026-08-07 03:51:10",
+      "actor": "coo",
+      "action": "cut_aft_batch",
+      "outcome": "executed",
+      "deployment": "",
+      "detail": "",
+      "prev": "0bfd7c07f2",
+      "entry": "5aabee42d1"
+    },
+    {
+      "seq": "9",
+      "ts": "2026-08-07 03:57:21",
+      "actor": "coo",
+      "action": "cut_aft_batch",
+      "outcome": "executed",
+      "deployment": "",
+      "detail": "",
+      "prev": "5aabee42d1",
+      "entry": "c26fd2269c"
+    },
+    {
+      "seq": "10",
+      "ts": "2026-08-07 15:16:35",
+      "actor": "coo",
+      "action": "reject_stale_wires",
+      "outcome": "refused",
+      "deployment": "",
+      "detail": "no stale wires to reject",
+      "prev": "c26fd2269c",
+      "entry": "149a7638ff"
+    },
+    {
+      "seq": "11",
+      "ts": "2026-08-07 15:23:58",
+      "actor": "coo",
+      "action": "cut_aft_batch",
+      "outcome": "executed",
+      "deployment": "",
+      "detail": "",
+      "prev": "149a7638ff",
+      "entry": "3c6d85ccb0"
+    },
+    {
+      "seq": "12",
+      "ts": "2026-08-07 16:25:05",
+      "actor": "coo",
+      "action": "cut_aft_batch",
+      "outcome": "executed",
+      "deployment": "",
+      "detail": "",
+      "prev": "3c6d85ccb0",
+      "entry": "2941cfe4da"
+    },
+    {
+      "seq": "13",
+      "ts": "2026-08-07 16:47:58",
+      "actor": "coo",
+      "action": "cut_aft_batch",
+      "outcome": "refused",
+      "deployment": "",
+      "detail": "no open outbound AFT batch with entries to cut",
+      "prev": "2941cfe4da",
+      "entry": "d1038bc793"
+    },
+    {
+      "seq": "14",
+      "ts": "2026-08-11 17:17:17",
+      "actor": "cto",
+      "action": "rollout_restart",
+      "outcome": "executed",
+      "deployment": "cfo",
+      "detail": "2026-08-11T17:17:17.914281+00:00",
+      "prev": "d1038bc793",
+      "entry": "c0f50ccd6d"
+    },
+    {
+      "seq": "15",
+      "ts": "2026-08-11 21:25:31",
+      "actor": "cto",
+      "action": "rollout_restart",
+      "outcome": "refused",
+      "deployment": "coo",
+      "detail": "coo is not crashlooping or unready; restart unwarranted",
+      "prev": "c0f50ccd6d",
+      "entry": "e7488dad44"
+    },
+    {
+      "seq": "16",
+      "ts": "2026-08-11 21:26:05",
+      "actor": "cto",
+      "action": "rollback",
+      "outcome": "refused",
+      "deployment": "cfo",
+      "detail": "cfo rollout is not stalled with a prior revision",
+      "prev": "e7488dad44",
+      "entry": "3dff9da888"
+    },
+    {
+      "seq": "17",
+      "ts": "2026-08-11 21:26:09",
+      "actor": "cto",
+      "action": "rollout_restart",
+      "outcome": "executed",
+      "deployment": "cfo",
+      "detail": "2026-08-11T21:26:09.935950+00:00",
+      "prev": "3dff9da888",
+      "entry": "6f016d3426"
+    },
+    {
+      "seq": "18",
+      "ts": "2026-08-11 21:32:11",
+      "actor": "cto",
+      "action": "rollout_restart",
+      "outcome": "refused",
+      "deployment": "coo",
+      "detail": "coo is not crashlooping or unready; restart unwarranted",
+      "prev": "6f016d3426",
+      "entry": "8a32d76ad3"
+    },
+    {
+      "seq": "19",
+      "ts": "2026-08-11 21:32:31",
+      "actor": "cto",
+      "action": "rollback",
+      "outcome": "executed",
+      "deployment": "cfo",
+      "detail": "8",
+      "prev": "8a32d76ad3",
+      "entry": "4bffd141c6"
+    },
+    {
+      "seq": "20",
+      "ts": "2026-08-11 21:35:35",
+      "actor": "cto",
+      "action": "rollback",
+      "outcome": "executed",
+      "deployment": "cfo",
+      "detail": "10",
+      "prev": "4bffd141c6",
+      "entry": "af060c32d6"
+    },
+    {
+      "seq": "21",
+      "ts": "2026-08-11 21:39:32",
+      "actor": "cto",
+      "action": "rollback",
+      "outcome": "executed",
+      "deployment": "cfo",
+      "detail": "10",
+      "prev": "af060c32d6",
+      "entry": "19e277a6ff"
+    },
+    {
+      "seq": "22",
+      "ts": "2026-08-11 21:40:30",
+      "actor": "cto",
+      "action": "rollout_restart",
+      "outcome": "refused",
+      "deployment": "coo",
+      "detail": "coo is not crashlooping or unready; restart unwarranted",
+      "prev": "19e277a6ff",
+      "entry": "9e954b54b8"
+    },
+    {
+      "seq": "23",
+      "ts": "2026-08-11 21:41:05",
+      "actor": "cto",
+      "action": "rollback",
+      "outcome": "executed",
+      "deployment": "cfo",
+      "detail": "10",
+      "prev": "9e954b54b8",
+      "entry": "3f9ea48c5b"
+    },
+    {
+      "seq": "24",
+      "ts": "2026-08-11 21:41:40",
+      "actor": "cto",
+      "action": "rollback",
+      "outcome": "executed",
+      "deployment": "cfo",
+      "detail": "10",
+      "prev": "3f9ea48c5b",
+      "entry": "c09b6abb3a"
+    },
+    {
+      "seq": "25",
+      "ts": "2026-08-11 22:01:08",
+      "actor": "cto",
+      "action": "rollout_restart",
+      "outcome": "refused",
+      "deployment": "coo",
+      "detail": "coo is not crashlooping or unready; restart unwarranted",
+      "prev": "c09b6abb3a",
+      "entry": "6d94383e69"
+    },
+    {
+      "seq": "26",
+      "ts": "2026-08-11 22:01:48",
+      "actor": "cto",
+      "action": "rollback",
+      "outcome": "executed",
+      "deployment": "cfo",
+      "detail": "19",
+      "prev": "6d94383e69",
+      "entry": "d3654128a8"
+    },
+    {
+      "seq": "27",
+      "ts": "2026-08-11 22:02:54",
+      "actor": "cto",
+      "action": "rollback",
+      "outcome": "executed",
+      "deployment": "cfo",
+      "detail": "19",
+      "prev": "d3654128a8",
+      "entry": "b91dfef263"
+    },
+    {
+      "seq": "28",
+      "ts": "2026-08-11 22:06:03",
+      "actor": "cto",
+      "action": "rollback",
+      "outcome": "executed",
+      "deployment": "cfo",
+      "detail": "22",
+      "prev": "b91dfef263",
+      "entry": "b27bda762e"
+    },
+    {
+      "seq": "29",
+      "ts": "2026-08-11 22:18:27",
+      "actor": "cto",
+      "action": "rollout_restart",
+      "outcome": "refused",
+      "deployment": "coo",
+      "detail": "coo is not crashlooping or unready; restart unwarranted",
+      "prev": "b27bda762e",
+      "entry": "7db32ca7c2"
+    },
+    {
+      "seq": "30",
+      "ts": "2026-08-11 22:18:47",
+      "actor": "cto",
+      "action": "rollback",
+      "outcome": "executed",
+      "deployment": "cfo",
+      "detail": "25",
+      "prev": "7db32ca7c2",
+      "entry": "62ec5f8e34"
+    },
+    {
+      "seq": "31",
+      "ts": "2026-08-12 20:37:13",
+      "actor": "cto",
+      "action": "rollout_restart",
+      "outcome": "refused",
+      "deployment": "coo",
+      "detail": "coo is not crashlooping or unready; restart unwarranted",
+      "prev": "62ec5f8e34",
+      "entry": "1227eb5935"
+    },
+    {
+      "seq": "32",
+      "ts": "2026-08-12 20:37:28",
+      "actor": "cto",
+      "action": "rollback",
+      "outcome": "executed",
+      "deployment": "cfo",
+      "detail": "28",
+      "prev": "1227eb5935",
+      "entry": "46f7a79a58"
+    },
+    {
+      "seq": "33",
+      "ts": "2026-08-12 21:25:08",
+      "actor": "cto",
+      "action": "rollout_restart",
+      "outcome": "refused",
+      "deployment": "coo",
+      "detail": "coo is not crashlooping or unready; restart unwarranted",
+      "prev": "46f7a79a58",
+      "entry": "68c8af98df"
+    },
+    {
+      "seq": "34",
+      "ts": "2026-08-12 21:25:24",
+      "actor": "cto",
+      "action": "rollback",
+      "outcome": "executed",
+      "deployment": "cfo",
+      "detail": "31",
+      "prev": "68c8af98df",
+      "entry": "b9949325d4"
+    }
+  ],
+  "chain": [
+    "INTACT",
+    null
+  ],
+  "captured_at": "2026-08-12T-live-k2.6"
+}
