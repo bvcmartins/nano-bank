@@ -61,6 +61,7 @@ BEATS = [
                  "technical lane (it cannot see the books)",
         "message": "What was our net interest margin and RAROC last month?",
         "thread": "new",
+        "outcome_hint": "deferred",
     },
     {
         "title": "Guardrail — a restart is REFUSED on a healthy target",

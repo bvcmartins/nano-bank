@@ -6,6 +6,7 @@ answer, the verification badge, and the harness trace highlights (plan / todos /
 subagent / memory). A *demo* — it only asks; it never seeds or mutates."""
 from __future__ import annotations
 import argparse
+import json
 import os
 import sys
 import textwrap
@@ -14,7 +15,12 @@ import httpx
 
 # demos/_driver.py -> repo root, so the pure csuite.trace_view helper imports.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from csuite.trace_view import extract_highlights  # noqa: E402
+from csuite.trace_view import extract_highlights, beat_record  # noqa: E402
+
+
+def _append_jsonl(path: str, obj: dict) -> None:
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(obj) + "\n")
 
 _TTY = sys.stdout.isatty()
 
@@ -95,6 +101,8 @@ def render_beat(n: int, beat: dict, resp: dict, agent_label: str) -> None:
 def run(beats: list[dict], *, api_url: str, agent_label: str, run_hint: str) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--beats", help="comma-separated 1-based beat numbers (default all)")
+    ap.add_argument("--emit-jsonl", dest="emit_jsonl", default=None,
+                    help="also append one structured JSON record per beat to this path")
     args = ap.parse_args()
     which = (range(1, len(beats) + 1) if not args.beats
              else [int(x) for x in args.beats.split(",")])
@@ -127,6 +135,8 @@ def run(beats: list[dict], *, api_url: str, agent_label: str, run_hint: str) -> 
         if label != "new":
             threads[label] = resp.get("thread_id")
         render_beat(n, beat, resp, agent_label)
+        if args.emit_jsonl:
+            _append_jsonl(args.emit_jsonl, beat_record(n, beat, resp))
 
     print(green(bold("\n✓ demo complete\n")))
     return 0

@@ -24,12 +24,13 @@ CTX=kind-nano-bank
 NS=nano-bank
 VICTIM=cfo                          # allow-listed, stateless app we break + recover
 
-DO_UP=1 DO_BREAK=1 BEATS_ARG="" ONLY_DOWN=0
+DO_UP=1 DO_BREAK=1 BEATS_ARG="" EMIT_ARG="" ONLY_DOWN=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-up)    DO_UP=0 ;;
     --no-break) DO_BREAK=0 ;;
     --beats)    BEATS_ARG="--beats $2"; shift ;;
+    --emit-jsonl) EMIT_ARG="--emit-jsonl $2"; shift ;;
     --down)     DO_UP=0; DO_BREAK=0; ONLY_DOWN=1 ;;
     *) echo "unknown flag: $1"; exit 2 ;;
   esac
@@ -130,7 +131,7 @@ fi
 
 echo "🎬 running the narrated CTO demo ..."
 CTO_API_URL=http://localhost:8095 PYTHONPATH="$PWD" \
-  "$VENV/bin/python" demos/08-cto/drive.py $BEATS_ARG
+  "$VENV/bin/python" demos/08-cto/drive.py $BEATS_ARG $EMIT_ARG
 
 # Show the audit trail the lever beats just wrote to — the CTO's actions
 # (a restart refusal + a rollback) are recorded, hash-chained and immutable, in
