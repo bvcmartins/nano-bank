@@ -20,7 +20,8 @@ spec:
         env:
         - { name: PLATFORM_MCP_URL, value: http://platform-mcp:8094/mcp }
         - { name: OLLAMA_BASE_URL,  value: https://ollama.com/v1 }
-        - { name: CTO_MODEL,        value: kimi-k2.6 }
+        - { name: CTO_MODEL,          value: kimi-k3 }
+        - { name: CTO_MODEL_FALLBACK, value: kimi-k2.6 }   # kimi-k3 is metered add-on; degrade if credit empty
         - { name: API_PORT,         value: "8095" }
         - { name: QDRANT_URL,       value: http://agent-qdrant:6333 }
         - { name: MEMORY_NAMESPACE, value: cto }

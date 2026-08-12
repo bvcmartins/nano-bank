@@ -33,14 +33,33 @@ def _default_probe(model: str, settings: Settings) -> bool:
         return False
 
 
+def _candidates(settings: Settings) -> list[str]:
+    """Primary model then fallback, de-duplicated, empties dropped.
+
+    kimi-k3 is a metered add-on on ollama.com; when its credit is empty (or the
+    network is down) its probe fails and we degrade to kimi-k2.6 rather than
+    refuse to start.
+    """
+    out: list[str] = []
+    for m in (settings.cto_model, settings.cto_model_fallback):
+        if m and m not in out:
+            out.append(m)
+    return out
+
+
 def resolve_model(settings: Settings,
                   probe: Optional[Callable[[str, Settings], bool]] = None) -> str:
     probe = probe or _default_probe
-    model = settings.cto_model
-    if probe(model, settings):
-        log.info("resolved model: %s", model)
-        return model
-    raise RuntimeError(f"{model} did not answer at {settings.ollama_base_url}")
+    candidates = _candidates(settings)
+    for i, model in enumerate(candidates):
+        if probe(model, settings):
+            if i > 0:
+                log.warning("primary model unavailable; fell back to %s", model)
+            log.info("resolved model: %s", model)
+            return model
+    raise RuntimeError(
+        f"no model answered at {settings.ollama_base_url}: "
+        f"tried {', '.join(candidates)}")
 
 
 def init_models(settings: Settings,
@@ -64,7 +83,8 @@ def llm(*, temperature: float = 0.1, max_tokens: Optional[int] = None) -> ChatOp
 
 
 def backend_healthcheck(settings: Settings) -> bool:
+    """Healthy if any candidate (primary or fallback) answers."""
     try:
-        return _default_probe(settings.cto_model, settings)
+        return any(_default_probe(m, settings) for m in _candidates(settings))
     except Exception:  # noqa: BLE001
         return False

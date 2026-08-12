@@ -4,6 +4,7 @@ from cto.config import Settings
 def test_defaults():
     s = Settings.from_env({})
     assert s.cto_model == "kimi-k2.6"
+    assert s.cto_model_fallback == "kimi-k2.6"
     assert s.platform_mcp_url == "http://localhost:8094/mcp"
     assert s.memory_namespace == "cto"
     assert s.memory_collection == "cto_memory"
