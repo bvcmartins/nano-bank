@@ -181,6 +181,15 @@ pub(crate) async fn screen(
         },
         agent: input.agent.clone(),
         session: session_context(state, input.session_id).await,
+        // The security boundary, and the reason it lives here rather than in
+        // the middleware that carried the header: this is where the outbound
+        // request is assembled, so this is where a reviewer looks for what the
+        // caller is allowed to influence. Off by default — see
+        // config::FraudSettings::accept_simulated_time.
+        requested_at: super::simulated_time::decision_instant(
+            state.settings.fraud.accept_simulated_time,
+            super::simulated_time::supplied(),
+        ),
     };
 
     match state.fraud.assess(&request).await {

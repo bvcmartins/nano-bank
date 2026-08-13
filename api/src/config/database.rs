@@ -147,6 +147,20 @@ pub async fn run_migrations(pool: &DatabasePool) -> Result<(), sqlx::Error> {
         "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS cost_centre TEXT",
         "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS economic_event_id UUID",
         "CREATE INDEX IF NOT EXISTS idx_transactions_event ON transactions(economic_event_id)",
+        // Carries the fraud linkage across the origination → settlement boundary
+        // for AFT (#54): an entry is screened when it is created but writes no
+        // transactions row until the batch settles, so without somewhere to rest
+        // the engine's operation_id in between, the decision becomes unreachable.
+        // Additive; entries written before this stay NULL, which reads correctly
+        // as "no linkage recorded".
+        "ALTER TABLE aft_entries ADD COLUMN IF NOT EXISTS metadata JSONB",
+        // Carries the fraud linkage across the authorize → capture boundary for
+        // cards (#54): screening happens in one request and the transactions row
+        // is written in another, so without somewhere to rest the engine's
+        // operation_id in between, the decision becomes unreachable. Additive;
+        // holds written before this stay NULL, which reads correctly as "no
+        // linkage recorded".
+        "ALTER TABLE account_holds ADD COLUMN IF NOT EXISTS metadata JSONB",
         // Phase 3: step-up pending approvals.
         r#"
         CREATE TABLE IF NOT EXISTS pending_approvals (
@@ -292,6 +306,14 @@ pub async fn run_migrations(pool: &DatabasePool) -> Result<(), sqlx::Error> {
         "ALTER TABLE agents ADD COLUMN IF NOT EXISTS registered_ip INET",
         "CREATE INDEX IF NOT EXISTS idx_agents_registered_ip \
          ON agents (registered_ip, created_at) WHERE registered_ip IS NOT NULL",
+        // Idempotent "open account": a retried request (same customer, same key)
+        // must return the original account, not open a second one. Additive
+        // self-heal for DBs whose accounts table predates the key — the column
+        // is nullable so existing rows and unkeyed callers stay NULL, and NULLs
+        // are distinct in the partial index so they never collide.
+        "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(255)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_idempotency \
+         ON accounts (customer_id, idempotency_key) WHERE idempotency_key IS NOT NULL",
     ] {
         sqlx::query(ddl).execute(pool).await?;
     }

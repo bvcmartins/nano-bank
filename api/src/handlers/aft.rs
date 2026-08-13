@@ -213,6 +213,52 @@ async fn caller_owns_account(
     .fetch_one(&state.pool)
     .await?)
 }
+/// Copy an entry's origination linkage onto the `transactions` row settlement
+/// just created.
+///
+/// Settlement does **not** re-screen — it executes a decision already made at
+/// origination — so the id written here must be that one. A fresh id appearing
+/// at settlement would mean something screened silently, which is worth
+/// noticing rather than papering over.
+///
+/// Only the hold row is stamped, never the release: the release is the second
+/// leg of an already-screened movement, not a separately screened one. Same
+/// rule that keeps `card_settlement` unstamped.
+async fn carry_linkage(
+    tx: &mut crate::rails::PgTx<'_>,
+    txn_id: Uuid,
+    entry_metadata: Option<&serde_json::Value>,
+) -> Result<(), AppError> {
+    let Some(fraud) = entry_metadata.and_then(|m| m.get("fraud")) else {
+        return Ok(());
+    };
+    sqlx::query(
+        "UPDATE transactions SET metadata = jsonb_set(COALESCE(metadata,'{}'::jsonb), \
+         '{fraud}', $2::jsonb) WHERE transaction_id = $1",
+    )
+    .bind(txn_id)
+    .bind(fraud)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// The engine linkage an origination should carry to settlement.
+///
+/// An AFT entry is screened when it is created, but writes no `transactions`
+/// row until the batch settles — a separate request, where the `FraudLink` no
+/// longer exists. Parking the blob on the entry is what lets the settled
+/// movement point back at the decision that allowed it (#54). Without it a
+/// screened, possibly blocked, payment reads as never screened.
+///
+/// `None` when nothing was actually screened (backend off): writing an empty
+/// blob would assert a decision that does not exist.
+fn origination_linkage(fraud: &crate::fraud::gate::FraudLink) -> Option<serde_json::Value> {
+    fraud
+        .screened
+        .then(|| serde_json::json!({ "fraud": fraud.metadata() }))
+}
+
 
 /// A CPA-005 file carried in a JSON body (network inbound / returns).
 #[derive(serde::Deserialize)]
@@ -418,8 +464,8 @@ async fn create_credit(
     let batch_id = open_batch(&mut tx).await?;
     let entry_id: Uuid = sqlx::query_scalar(
         "INSERT INTO aft_entries (batch_id, kind, direction, originator_account_id, \
-         counterparty_institution, counterparty_transit, counterparty_account, payee_name, amount, idempotency_key) \
-         VALUES ($1,'credit','outbound',$2,$3,$4,$5,$6,$7,$8) RETURNING entry_id",
+         counterparty_institution, counterparty_transit, counterparty_account, payee_name, amount, idempotency_key, metadata) \
+         VALUES ($1,'credit','outbound',$2,$3,$4,$5,$6,$7,$8,$9) RETURNING entry_id",
     )
     .bind(batch_id)
     .bind(req.originator_account_id)
@@ -429,6 +475,7 @@ async fn create_credit(
     .bind(&req.payee_name)
     .bind(amount)
     .bind(&req.idempotency_key)
+    .bind(origination_linkage(&fraud_link))
     .fetch_one(&mut *tx)
     .await
     .map_err(originate_conflict)?;
@@ -532,8 +579,8 @@ async fn create_debit(
     let batch_id = open_batch(&mut tx).await?;
     let entry_id: Uuid = sqlx::query_scalar(
         "INSERT INTO aft_entries (batch_id, kind, direction, originator_account_id, counterparty_account_id, \
-         counterparty_institution, counterparty_transit, counterparty_account, payee_name, amount, mandate_id, idempotency_key) \
-         VALUES ($1,'debit','outbound',$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING entry_id",
+         counterparty_institution, counterparty_transit, counterparty_account, payee_name, amount, mandate_id, idempotency_key, metadata) \
+         VALUES ($1,'debit','outbound',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING entry_id",
     )
     .bind(batch_id)
     .bind(req.originator_account_id)
@@ -545,6 +592,7 @@ async fn create_debit(
     .bind(amount)
     .bind(req.mandate_id)
     .bind(&req.idempotency_key)
+    .bind(origination_linkage(&fraud_link))
     .fetch_one(&mut *tx)
     .await
     .map_err(originate_conflict)?;
@@ -734,9 +782,10 @@ async fn network_settle(
         return Err(AppError::Conflict(format!("batch is {status}")));
     }
 
-    let entries = sqlx::query_as::<_, (Uuid, String, Decimal, Option<Uuid>, Option<Uuid>, Option<String>)>(
+    #[allow(clippy::type_complexity)]
+    let entries = sqlx::query_as::<_, (Uuid, String, Decimal, Option<Uuid>, Option<Uuid>, Option<String>, Option<serde_json::Value>)>(
         "SELECT entry_id, kind::text, amount, originator_account_id, counterparty_account_id, \
-         counterparty_institution FROM aft_entries WHERE batch_id=$1 AND status='pending' ORDER BY created_at",
+         counterparty_institution, metadata FROM aft_entries WHERE batch_id=$1 AND status='pending' ORDER BY created_at",
     )
     .bind(batch_id)
     .fetch_all(&mut *tx)
@@ -746,7 +795,9 @@ async fn network_settle(
     let mut rejected = 0i64;
     let mut settled_credit_total = Decimal::ZERO;
 
-    for (entry_id, kind, amount, originator, counterparty_acct, institution) in entries {
+    for (entry_id, kind, amount, originator, counterparty_acct, institution, entry_metadata) in
+        entries
+    {
         if kind == "credit" {
             // Direct deposit to an external recipient: debit the originator, funds → settlement.
             let orig =
@@ -764,6 +815,7 @@ async fn network_settle(
             let hold = rail
                 .hold(&state, &mut tx, orig, amount, "AFT credit settlement")
                 .await?;
+            carry_linkage(&mut tx, hold.transaction_id, entry_metadata.as_ref()).await?;
             rail.release(
                 &state,
                 &mut tx,
@@ -796,6 +848,7 @@ async fn network_settle(
             let hold = rail
                 .hold(&state, &mut tx, payer, amount, "AFT PAD settlement")
                 .await?;
+            carry_linkage(&mut tx, hold.transaction_id, entry_metadata.as_ref()).await?;
             rail.release(
                 &state,
                 &mut tx,

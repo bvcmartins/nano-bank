@@ -38,7 +38,10 @@ pub struct FinanceSettings {
     #[serde(with = "rust_decimal::serde::str", default = "default_maintenance_fee")]
     pub maintenance_fee: Decimal,
     /// Maintenance fee is waived at/above this balance. Default $3000.
-    #[serde(with = "rust_decimal::serde::str", default = "default_maintenance_waiver")]
+    #[serde(
+        with = "rust_decimal::serde::str",
+        default = "default_maintenance_waiver"
+    )]
     pub maintenance_waiver: Decimal,
 }
 
@@ -105,6 +108,17 @@ pub struct FraudSettings {
     /// in a cron-triggered drain where a couple of seconds is fine.
     #[serde(default = "default_outcomes_timeout_ms")]
     pub outcomes_timeout_ms: u64,
+    /// Honour an `X-Simulated-Time` header as the instant a decision is
+    /// measured at, instead of wall clock.
+    ///
+    /// **Off in any deployment where real money moves.** A caller-supplied
+    /// clock drives the engine's velocity windows, so a timestamp from last
+    /// week makes every window look empty — it turns off the primary lever the
+    /// engine has. This exists so a simulated corpus can be replayed with a
+    /// real time axis (fraud engine #21, which added the matching opt-in on
+    /// the other side); it is a backfill affordance, nothing more.
+    #[serde(default)]
+    pub accept_simulated_time: bool,
 }
 
 fn default_fraud_backend() -> String {
@@ -136,6 +150,7 @@ impl Default for FraudSettings {
             fail_closed_above: default_fail_closed_above(),
             service_token: String::new(),
             outcomes_timeout_ms: default_outcomes_timeout_ms(),
+            accept_simulated_time: false,
         }
     }
 }

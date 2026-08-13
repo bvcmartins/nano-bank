@@ -222,6 +222,7 @@ async fn create_router(pool: config::database::DatabasePool, settings: &Settings
                 .layer(TraceLayer::new_for_http())
                 .layer(CompressionLayer::new())
                 .layer(TimeoutLayer::new(Duration::from_secs(30)))
+                .layer(axum::middleware::from_fn(fraud::simulated_time::capture))
                 .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10MB max request size
                 .layer(cors),
         )

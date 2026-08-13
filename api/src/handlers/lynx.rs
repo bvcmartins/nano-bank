@@ -294,6 +294,10 @@ async fn initiate_wire(
     let hold = rail
         .hold(&state, &mut tx, req.from_account_id, amount, "Lynx wire")
         .await?;
+    // Record which decision gated this movement, in the same transaction that
+    // moves the money (#52). Without it the engine's ruling on this wire is
+    // unreachable and reads as "never screened".
+    crate::rails::common::tag_fraud(&mut tx, hold.transaction_id, &fraud_link).await?;
     recompute_available(&mut tx, req.from_account_id).await?;
 
     let uetr = Uuid::new_v4();

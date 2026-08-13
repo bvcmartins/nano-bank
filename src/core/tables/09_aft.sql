@@ -62,6 +62,11 @@ CREATE TABLE aft_entries (
     settle_transaction_id    UUID REFERENCES transactions(transaction_id),
     return_transaction_id    UUID REFERENCES transactions(transaction_id),
     created_at               TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    -- Same shape as transactions.metadata, and it holds the same `fraud` blob.
+    -- An AFT entry is screened at origination but writes no transactions row
+    -- until settlement, so the engine linkage has to rest here in between or it
+    -- is lost (#54).
+    metadata                 JSONB,
     CONSTRAINT chk_aft_amount_positive CHECK (amount > 0),
     CONSTRAINT chk_aft_amount_precision CHECK (amount = ROUND(amount, 2))
 );

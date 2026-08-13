@@ -2,8 +2,11 @@ import TokenCountdown from "@/components/TokenCountdown";
 import { decodeJwtExpiry } from "@/lib/jwt";
 import { requireSession } from "@/lib/session";
 import { Metadata } from 'next';
-import { Wallet, CreditCard, PiggyBank, AlertCircle, TrendingUp } from "lucide-react";
+import { CreditCard, PiggyBank, AlertCircle } from "lucide-react";
 import { API_BASE_URL } from "@/lib/config";
+import { Account } from "@/lib/accounts";
+import GlassCard from "@/components/GlassCard";
+import GradientHeading from "@/components/GradientHeading";
 import Link from "next/link";
 
 export const metadata: Metadata = {
@@ -15,7 +18,7 @@ export default async function Page() {
     const tokenExpiry = decodeJwtExpiry(accessToken);
 
     // Fetch accounts
-    let accounts: any[] = [];
+    let accounts: Account[] = [];
     let fetchError = false;
     try {
         const response = await fetch(`${API_BASE_URL}/api/v1/accounts`, {
@@ -60,11 +63,9 @@ export default async function Page() {
     return (
         <main className="relative z-10 flex-1 flex flex-col items-center justify-center gap-6 px-6 py-12">
             {/* Welcome Card */}
-            <div className="w-full max-w-3xl bg-gradient-to-br from-white/10 to-white/5 border border-white/15 backdrop-blur-xl rounded-2xl p-8 shadow-[0_20px_50px_rgba(0,0,0,0.5)]">
+            <GlassCard className="max-w-3xl">
                 <div className="mb-8">
-                    <h1 className="text-3xl font-extrabold tracking-tight bg-gradient-to-r from-white via-slate-100 to-nanobank-blue-sky bg-clip-text text-transparent">
-                        Welcome back, {profile.first_name}
-                    </h1>
+                    <GradientHeading>Welcome back, {profile.first_name}</GradientHeading>
                     <p className="text-slate-400 text-sm mt-2">{profile.email}</p>
                     {tokenExpiry !== null && (
                         <p className="text-xs mt-2">
@@ -76,11 +77,10 @@ export default async function Page() {
                 <div className="rounded-xl border border-dashed border-slate-700 bg-slate-900/30 p-8 text-center text-sm text-slate-400">
                     Your accounts, cards, and transactions will show up here.
                 </div>
-            </div>
+            </GlassCard>
 
             {/* Accounts Dashboard Snapshot Card */}
-            <div className="w-full max-w-3xl bg-gradient-to-br from-white/10 to-white/5 border border-white/15 backdrop-blur-xl rounded-2xl p-8 shadow-[0_20px_50px_rgba(0,0,0,0.5)]">
-
+            <GlassCard className="max-w-3xl">
                 {fetchError ? (
                     <div className="flex items-center gap-3 p-4 rounded-xl border border-rose-500/20 bg-rose-500/10 text-rose-300 text-sm">
                         <AlertCircle className="w-5 h-5 flex-shrink-0" />
@@ -139,7 +139,7 @@ export default async function Page() {
                         </Link>
                     </div>
                 )}
-            </div>
+            </GlassCard>
         </main>
     );
 }

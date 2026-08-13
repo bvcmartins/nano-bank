@@ -12,6 +12,7 @@
 pub mod engine;
 pub mod gate;
 pub mod noop;
+pub mod simulated_time;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -97,6 +98,10 @@ pub struct FraudRequest {
     pub initiated_via: &'static str,
     pub agent: Option<FraudAgentCtx>,
     pub session: Option<FraudSessionCtx>,
+    /// The instant to measure this decision at, when the deployment accepts a
+    /// caller-supplied one (`fraud.accept_simulated_time`, default off). `None`
+    /// means the engine uses its own clock — the case for all real traffic.
+    pub requested_at: Option<DateTime<Utc>>,
 }
 
 /// The fraud engine seen by nano-bank. Kept small: one synchronous assessment
