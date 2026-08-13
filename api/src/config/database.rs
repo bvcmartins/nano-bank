@@ -314,6 +314,115 @@ pub async fn run_migrations(pool: &DatabasePool) -> Result<(), sqlx::Error> {
         "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(255)",
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_idempotency \
          ON accounts (customer_id, idempotency_key) WHERE idempotency_key IS NOT NULL",
+        // Bank-wide decline log (canonical DDL: 15_decline_events.sql). Written
+        // best-effort off the request path; self-heal so a DB predating it starts
+        // collecting instead of silently swallowing every decline. Idempotent.
+        r#"
+        CREATE TABLE IF NOT EXISTS decline_events (
+            decline_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            occurred_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+            channel          TEXT NOT NULL,
+            reason_code      TEXT NOT NULL,
+            reason_category  TEXT NOT NULL,
+            account_id       UUID,
+            customer_id      UUID,
+            amount           NUMERIC(20,2),
+            currency         TEXT NOT NULL DEFAULT 'CAD',
+            counterparty     TEXT,
+            metadata         JSONB NOT NULL DEFAULT '{}'
+        )
+        "#,
+        "CREATE INDEX IF NOT EXISTS idx_decline_events_occurred ON decline_events (occurred_at)",
+        "CREATE INDEX IF NOT EXISTS idx_decline_events_channel ON decline_events (channel, occurred_at)",
+        "CREATE INDEX IF NOT EXISTS idx_decline_events_category \
+         ON decline_events (reason_category, occurred_at)",
+        // Hash-chained agent-action ledger (canonical DDL: 14_agent_action_ledger.sql).
+        // Unlike the decline log this is NOT best-effort — the COO levers surface a
+        // failed audit to the caller — so a DB predating the ledger would 500 every
+        // lever. Self-heal the table, sequence, functions and immutability trigger so
+        // the ledger exists on next boot without a manual DDL run. digest() needs
+        // pgcrypto (already created by 00_init on fresh DBs; ensured here too).
+        "CREATE EXTENSION IF NOT EXISTS pgcrypto",
+        r#"
+        CREATE TABLE IF NOT EXISTS agent_action_ledger (
+            seq        BIGINT PRIMARY KEY,
+            ts         TIMESTAMPTZ NOT NULL,
+            actor      TEXT NOT NULL,
+            action     TEXT NOT NULL,
+            params     JSONB NOT NULL DEFAULT '{}'::jsonb,
+            effect     JSONB NOT NULL DEFAULT '{}'::jsonb,
+            prev_hash  TEXT NOT NULL,
+            entry_hash TEXT NOT NULL
+        )
+        "#,
+        "CREATE SEQUENCE IF NOT EXISTS agent_action_ledger_seq OWNED BY agent_action_ledger.seq",
+        r#"
+        CREATE OR REPLACE FUNCTION _agent_ledger_canon(
+            p_seq BIGINT, p_ts TIMESTAMPTZ, p_actor TEXT, p_action TEXT,
+            p_params JSONB, p_effect JSONB, p_prev TEXT
+        ) RETURNS TEXT AS $$
+            SELECT p_seq::text || '|'
+                || to_char(p_ts AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.US') || '|'
+                || p_actor || '|' || p_action || '|'
+                || coalesce(p_params::text, '{}') || '|'
+                || coalesce(p_effect::text, '{}') || '|' || p_prev;
+        $$ LANGUAGE sql IMMUTABLE
+        "#,
+        r#"
+        CREATE OR REPLACE FUNCTION append_agent_action(
+            p_actor TEXT, p_action TEXT, p_params JSONB, p_effect JSONB
+        ) RETURNS TABLE(seq BIGINT, entry_hash TEXT) AS $$
+        DECLARE
+            v_prev TEXT;
+            v_ts   TIMESTAMPTZ := clock_timestamp();
+            v_seq  BIGINT;
+            v_hash TEXT;
+        BEGIN
+            PERFORM pg_advisory_xact_lock(hashtext('agent_action_ledger'));
+            SELECT l.entry_hash INTO v_prev FROM agent_action_ledger l ORDER BY l.seq DESC LIMIT 1;
+            v_prev := COALESCE(v_prev, 'GENESIS');
+            v_seq  := nextval('agent_action_ledger_seq');
+            v_hash := encode(digest(
+                _agent_ledger_canon(v_seq, v_ts, p_actor, p_action, p_params, p_effect, v_prev),
+                'sha256'), 'hex');
+            INSERT INTO agent_action_ledger(seq, ts, actor, action, params, effect, prev_hash, entry_hash)
+            VALUES (v_seq, v_ts, p_actor, p_action,
+                    COALESCE(p_params, '{}'::jsonb), COALESCE(p_effect, '{}'::jsonb), v_prev, v_hash);
+            RETURN QUERY SELECT v_seq, v_hash;
+        END;
+        $$ LANGUAGE plpgsql
+        "#,
+        r#"
+        CREATE OR REPLACE FUNCTION _agent_ledger_immutable() RETURNS TRIGGER AS $$
+        BEGIN
+            RAISE EXCEPTION 'agent_action_ledger is append-only and immutable';
+        END;
+        $$ LANGUAGE plpgsql
+        "#,
+        "DROP TRIGGER IF EXISTS trg_agent_action_ledger_immutable ON agent_action_ledger",
+        "CREATE TRIGGER trg_agent_action_ledger_immutable \
+         BEFORE UPDATE OR DELETE ON agent_action_ledger \
+         FOR EACH ROW EXECUTE FUNCTION _agent_ledger_immutable()",
+        r#"
+        CREATE OR REPLACE FUNCTION verify_agent_ledger() RETURNS BIGINT AS $$
+        DECLARE
+            r      RECORD;
+            v_prev TEXT := 'GENESIS';
+            v_calc TEXT;
+        BEGIN
+            FOR r IN SELECT * FROM agent_action_ledger ORDER BY seq ASC LOOP
+                v_calc := encode(digest(
+                    _agent_ledger_canon(r.seq, r.ts, r.actor, r.action, r.params, r.effect, r.prev_hash),
+                    'sha256'), 'hex');
+                IF r.prev_hash <> v_prev OR r.entry_hash <> v_calc THEN
+                    RETURN r.seq;
+                END IF;
+                v_prev := r.entry_hash;
+            END LOOP;
+            RETURN NULL;
+        END;
+        $$ LANGUAGE plpgsql
+        "#,
     ] {
         sqlx::query(ddl).execute(pool).await?;
     }
