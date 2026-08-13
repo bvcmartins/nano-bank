@@ -47,6 +47,43 @@ def _executed(effect):
     return {"outcome": "executed", "effect": effect}
 
 
+def _failed(reason):
+    return {"outcome": "failed", "reason": reason}
+
+
+_VALID_KINDS = ("remediation", "delivery")
+
+
+def _do_delegate(k8s, coder, audit, settings, kind, task):
+    """Delegate a coding task to the coder (opens a PR-gated PR against the sandbox).
+    Structurally allow-listed: the coder service is pinned to the sandbox repo, so
+    there is no repo to choose. remediation requires an observed failing signal.
+    Every path is audited — the attempt is a fact."""
+    params = {"kind": kind, "task": task}
+    if kind not in _VALID_KINDS:
+        outcome = _refused(f"unknown task kind {kind!r} (expected remediation|delivery)")
+        audit.post_action("delegate_coding_task", params, outcome)
+        return outcome
+    if not (task or "").strip():
+        outcome = _refused("empty task")
+        audit.post_action("delegate_coding_task", params, outcome)
+        return outcome
+    if kind == "remediation" and not levers.remediation_signal_present(
+            k8s.deployments(), k8s.pods(), settings.allow_list):
+        outcome = _refused("no failing/degraded platform signal observed; "
+                           "remediation is unwarranted")
+        audit.post_action("delegate_coding_task", params, outcome)
+        return outcome
+    try:
+        outcome = coder.code_task(kind, task)      # HTTP to the coder service
+    except Exception as e:  # noqa: BLE001
+        outcome = _failed(f"coder unreachable: {e}")
+        audit.post_action("delegate_coding_task", params, outcome)
+        return outcome
+    audit.post_action("delegate_coding_task", params, outcome)
+    return outcome
+
+
 def _do_restart(k8s, writer, audit, settings, cluster, deployment):
     params = {"cluster": cluster, "deployment": deployment}
     if not levers.is_allowed(settings.allow_list, cluster, deployment):
@@ -90,7 +127,7 @@ def _do_rollback(k8s, writer, audit, settings, cluster, deployment):
     return outcome
 
 
-def build_mcp(k8s, health, writer=None, audit=None, settings=None) -> FastMCP:
+def build_mcp(k8s, health, writer=None, audit=None, settings=None, coder=None) -> FastMCP:
     mcp = FastMCP(
         "nano-platform",
         transport_security=TransportSecuritySettings(
@@ -160,6 +197,21 @@ def build_mcp(k8s, health, writer=None, audit=None, settings=None) -> FastMCP:
             on the allow-list. Autonomous + audited; report the outcome verbatim."""
             return _stringify(_do_rollback(k8s, writer, audit, settings, cluster, deployment))
 
+    # The delegation lever needs only coder + audit + settings (plus the k8s reads
+    # build_mcp already has for the remediation precondition) — independent of the
+    # k8s writer, so it registers on its own condition.
+    if coder is not None and audit is not None and settings is not None:
+        @mcp.tool()
+        def delegate_coding_task(kind: str, task: str) -> dict:
+            """Delegate a scoped coding task to the engineering coder, which opens a
+            PR-gated pull request against the sandbox service repo. kind='remediation'
+            (a durable root-cause code fix — REFUSED unless a real failing/degraded
+            platform signal is observed) or kind='delivery' (a handed-down backlog
+            task). You do NOT write code yourself; you delegate it. A human reviews and
+            MERGES the PR — never you. Autonomous + audited; report the outcome and the
+            PR link verbatim."""
+            return _stringify(_do_delegate(k8s, coder, audit, settings, kind, task))
+
     return mcp
 
 
@@ -171,7 +223,9 @@ def main():
     from .audit import LedgerAudit
     writer = K8sWriter(settings)
     audit = LedgerAudit(settings)
-    mcp = build_mcp(k8s, health, writer=writer, audit=audit, settings=settings)
+    from .coder_client import CoderClient
+    coder = CoderClient(settings)
+    mcp = build_mcp(k8s, health, writer=writer, audit=audit, settings=settings, coder=coder)
     import uvicorn
     uvicorn.run(mcp.streamable_http_app(), host="0.0.0.0", port=settings.mcp_port)
 
