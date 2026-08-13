@@ -32,7 +32,7 @@ is Phase C"* — is what this builds.
 | Question | Decision |
 |---|---|
 | Narrative | Both incident-remediation **and** delivery — one capability, two beats. |
-| Coder engine | A **new thin kimi/ollama coder** (same stack as the CTO; no new API keys). |
+| Coder engine | A **port of `coding_agent_gemini.py`** with only the model-factory seam swapped Gemini → kimi/ollama (same stack as the CTO; no new API keys). |
 | Artifact | A **real GitHub PR**. |
 | Target repo | A **dedicated sandbox repo**, reseeded each run. |
 | Coder home | An **in-cluster service** (the "engineering seat"), called by the CTO's lever over HTTP. |
@@ -75,27 +75,61 @@ things:
 The repo is created once (`bvcmartins/cto-sandbox`); provisioning is a documented
 one-time step, not part of every run.
 
-### 2. The coder service — `coder/`
+### 2. The coder — port of `coding_agent_gemini.py`, kimi/ollama backend
 
-A thin LangGraph react agent (kimi via ollama) with a **narrow tool surface**:
-`read_file`, `apply_patch`, `run_tests`. The **model only proposes the code
-change**. Everything privileged and deterministic is Python around the loop —
-mirroring the CTO's "model reasons; Python acts, verifies, audits" split:
+**The coding agent follows the exact pattern of
+`~/dev/agentic_patterns/src/code_assistant/coding_agent_gemini.py`.** That module
+is deliberately built so *only the model factory is backend-specific; everything
+above it is backend-agnostic LangChain/LangGraph.* We port it into
+`coder/coding_agent.py` and swap that one seam Gemini → kimi/ollama.
+
+**Ported verbatim in structure (backend-agnostic — kept as-is):**
+- `CodingAgent` class: `generate(task, test_code|criteria)`, `fix(task, code,
+  feedback)`, and the `_solve_loop` that feeds the **verbatim test failure** back
+  into the next attempt until green or `max_rounds`.
+- The **two modes**: `direct` (architect→editor→verify — deliberate then
+  transcribe) and `agentic` (a ReAct tool loop over the workspace).
+- The **quality gates + tools**: `lint_python` (compile + bare-except),
+  `_run_tests` (pytest), `write_code_to_disk` (lint-gated persistence), the
+  `@tool` surface (`read_file`, `write_file`, `bash`, `write_code`, `run_python`,
+  `run_tests`), and the `_safe_path` WORKSPACE sandbox.
+- The **spec layer** (`compile_test_suite` / `spec_verify`), `CodeResult`, the
+  **self-improvement seam** (`add_instruction` / `save_policy` / `load_policy`),
+  and the offline `_selftest()` (no backend) + the `RichTracer` observability.
+
+**Swapped (the one backend seam):** `_build_model` / `llm` / `backend_healthcheck`
+are re-pointed at kimi via ollama, reusing the CTO's `model_factory` conventions
+(`ChatOpenAI` at `https://ollama.com/v1`, the `reasoning`/`fast` role split, and
+the primary→fallback `_candidates` resolution). No Gemini, no new API keys.
+
+**Repo-level adaptation.** `coding_agent_gemini` solves single-file tasks into
+`agent_code/solution.py`. For a real repo the service points `WORKSPACE` at the
+**cloned sandbox checkout** and drives the coder in **`agentic` mode**, using the
+**sandbox's own pytest suite** as the contract (the `_run_tests` gate runs the
+repo's tests). So the coder reads the failing test, edits the repo file, and
+re-verifies against the real suite — the same generate→verify epistemics, applied
+to an existing codebase.
+
+### 2b. The coder service — `coder/api.py`
+
+A thin FastAPI wrapper around `CodingAgent` that adds the git/gh plumbing and the
+network surface (the same shape as the other C-suite seats):
 
 - `POST /code-task {kind, task}`:
-  1. clone the sandbox into a temp workdir,
-  2. run the coder loop (bounded steps) so the model edits files + reads test output,
-  3. **run the tests** (deterministic),
-  4. **self-verify gate:** if tests fail → return `{"outcome":"failed", ...}` with
-     no PR; if green → branch `cto/<slug>-<ts>`, commit, push, `gh pr create`,
-     return `{"outcome":"executed","pr_url":...,"branch":...,"tests":...,"summary":...}`.
-- FastAPI with `/livez` + `/health`, same shape as the other C-suite seats.
-- k8s manifests (`coder/k8s/`). The image bundles `git`, `gh`, and python. A
+  1. clone the sandbox into a temp `WORKSPACE`,
+  2. run `CodingAgent(mode="agentic").generate/fix` against the repo's tests,
+  3. **self-verify gate** (`_run_tests` green?): red → `{"outcome":"failed", ...}`,
+     no PR; green → branch `cto/<slug>-<ts>` → commit → push → `gh pr create` →
+     `{"outcome":"executed","pr_url":...,"branch":...,"tests":...,"summary":...}`.
+- `/livez` + `/health` like the other seats.
+- k8s manifests (`coder/k8s/`). The image bundles `git`, `gh`, python + pytest. A
   **gh token** is a k8s secret; kimi creds come from the same ollama secret the
   CTO uses. Egress to github.com + ollama.com required.
 
-Pure, unit-testable helpers are separated from IO: task→branch-slug, the
-`gh pr create` argument builder, and the result-shaping (`code_task_result`).
+Pure, unit-testable helpers stay separate from IO: task→branch-slug, the
+`gh pr create` argument builder, and the result-shaping (`code_task_result`) —
+alongside the ones the port already unit-tests offline (`lint_python`,
+`compile_test_suite`, `write_code_to_disk`, the self-improvement seam).
 
 ### 3. The CTO's delegation lever — in `platform_mcp/mcp_server.py`
 
@@ -158,11 +192,14 @@ Guardrails: **allow-list** (sandbox only) · **self-verify** (no red PRs) ·
 **human-merge gate** · every delegation **audited** in the tamper-evident ledger.
 
 Testing:
-- Pure helpers (branch-slug, pr-arg builder, `code_task_result`, `beat_outcome`
-  `delegated` case, `outcome_style`) — unit tests.
+- The port carries its own **offline `_selftest()`** (lint gate, fence/think
+  stripping, write-code gate, `spec_verify` green/red, the self-improvement seam
+  round-trip, graph compilation) — kept and run in CI with no backend.
+- New pure helpers (branch-slug, pr-arg builder, `code_task_result`,
+  `beat_outcome` `delegated` case, `outcome_style`) — unit tests.
 - Coder service — a **fake model + a temp git repo** (no network): verifies the
-  loop edits files, the test-gate opens a PR only on green, and refuses-on-red
-  with no PR. `gh` and `push` are seams stubbed in the test.
+  agentic loop edits repo files, the test-gate opens a PR only on green, and
+  refuses-on-red with no PR. `gh` and `push` are seams stubbed in the test.
 - Lever — a **fake coder client**: self-verify refusal, allow-list refusal, and
   the exact ledger record on each of executed/refused/failed.
 - One **live smoke**: a real run producing a real PR against `cto-sandbox`, then
