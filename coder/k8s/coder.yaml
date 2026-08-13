@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coder
+  namespace: nano-bank
+  labels: { app: coder }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: coder } }
+  template:
+    metadata: { labels: { app: coder } }
+    spec:
+      containers:
+      - name: coder
+        image: nano-coder:dev
+        imagePullPolicy: Never
+        ports: [ { containerPort: 8096 } ]
+        envFrom:
+        - secretRef: { name: nano-agent-secrets }   # provides OLLAMA_API_KEY (reused from the CTO)
+        env:
+        - { name: OLLAMA_BASE_URL,      value: https://ollama.com/v1 }
+        - { name: CODER_MODEL,          value: kimi-k2.6 }
+        - { name: CODER_MODEL_FALLBACK, value: kimi-k2.6 }
+        - { name: SANDBOX_REPO,         value: bvcmartins/cto-sandbox }
+        - { name: GH_TOKEN_PATH,        value: /etc/coder/gh-token }
+        - { name: CODER_WORKSPACE_ROOT, value: /tmp/coder-workspaces }
+        - { name: API_PORT,             value: "8096" }
+        volumeMounts:
+        - { name: gh-token, mountPath: /etc/coder, readOnly: true }
+        livenessProbe:
+          httpGet: { path: /livez, port: 8096 }
+          initialDelaySeconds: 5
+          periodSeconds: 10
+      volumes:
+      - name: gh-token
+        secret:
+          secretName: coder-gh-token
+          items: [ { key: token, path: gh-token } ]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: coder
+  namespace: nano-bank
+spec:
+  selector: { app: coder }
+  ports: [ { port: 8096, targetPort: 8096 } ]
