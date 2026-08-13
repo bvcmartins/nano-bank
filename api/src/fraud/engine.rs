@@ -128,7 +128,9 @@ impl EngineFraudCheck {
                 "session_created_at": s.session_created_at,
                 "last_activity_at": s.last_activity_at,
             })),
-            "requested_at": chrono::Utc::now(),
+            // Wall clock unless this deployment accepts a supplied instant
+            // and the caller sent one (see fraud::gate::screen).
+            "requested_at": req.requested_at.unwrap_or_else(chrono::Utc::now),
         })
     }
 }
@@ -290,6 +292,64 @@ impl FraudCheck for EngineFraudCheck {
 mod tests {
     use super::*;
 
+    fn request(requested_at: Option<chrono::DateTime<chrono::Utc>>) -> FraudRequest {
+        FraudRequest {
+            operation_id: uuid::Uuid::new_v4(),
+            idempotency_key: "k".to_string(),
+            kind: "transfer",
+            amount: rust_decimal::Decimal::new(150000, 2),
+            from_account_id: uuid::Uuid::new_v4(),
+            to_account_id: None,
+            payee_handle: None,
+            description: None,
+            external_reference: None,
+            merchant: None,
+            customer_id: uuid::Uuid::new_v4(),
+            initiated_via: "web",
+            agent: None,
+            session: None,
+            requested_at,
+        }
+    }
+
+    /// The field has been on the wire contract since it was written; until the
+    /// engine's #21 it was read nowhere, and until this change the bank always
+    /// overwrote it with `now()`. Both halves have to hold for a replayed
+    /// corpus to have a time axis at all.
+    #[test]
+    fn a_supplied_instant_reaches_the_wire() {
+        let instant = chrono::DateTime::parse_from_rfc3339("2024-04-01T09:15:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+
+        let body = EngineFraudCheck::wire_body(&request(Some(instant)));
+
+        // Compare instants, not strings: serde's RFC 3339 rendering omits
+        // zero subsecond digits, so a string assertion would pin the
+        // serialiser's formatting rather than the value that was sent.
+        let stamped = chrono::DateTime::parse_from_rfc3339(body["requested_at"].as_str().unwrap())
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        assert_eq!(stamped, instant);
+    }
+
+    /// The default path, which is every real movement: no supplied instant
+    /// means the bank stamps its own clock, exactly as before this change.
+    #[test]
+    fn without_one_the_bank_stamps_its_own_clock() {
+        let before = chrono::Utc::now();
+        let body = EngineFraudCheck::wire_body(&request(None));
+        let after = chrono::Utc::now();
+
+        let stamped = chrono::DateTime::parse_from_rfc3339(body["requested_at"].as_str().unwrap())
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        assert!(
+            before <= stamped && stamped <= after,
+            "expected wall clock, got {stamped}"
+        );
+    }
+
     /// The two endpoints must not be able to trip each other's breaker.
     ///
     /// The failure this guards against is asymmetric and expensive in one
@@ -310,7 +370,10 @@ mod tests {
 
         for _ in 0..BREAKER_THRESHOLD {
             assert!(
-                engine.report_denial(&json!({ "event_key": "x" })).await.is_err(),
+                engine
+                    .report_denial(&json!({ "event_key": "x" }))
+                    .await
+                    .is_err(),
                 "the drain must fail against a dead engine"
             );
         }

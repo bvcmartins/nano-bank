@@ -67,11 +67,6 @@ const CASH_ACCOUNT_TYPE: &str = "chequing";
 
 const DEFAULT_HISTORY_LIMIT: u32 = 50;
 
-/// Flat fee charged on an outbound transfer (placeholder schedule).
-fn transfer_fee() -> Decimal {
-    Decimal::new(150, 2) // $1.50
-}
-
 pub fn transaction_routes() -> Router<AppState> {
     Router::new()
         .route("/", get(get_transactions))
@@ -508,7 +503,7 @@ pub(crate) async fn execute_transfer(
     )
     .await?;
 
-    let fee = transfer_fee();
+    let fee = state.settings.finance_config().transfer_fee;
     let cash_id = ensure_external_cash_account(&state.pool).await?;
 
     let mut tx = state.pool.begin().await?;
@@ -582,7 +577,7 @@ pub(crate) async fn execute_transfer(
     if fraud_link.screened {
         metadata["fraud"] = fraud_link.metadata();
     }
-    let txn_id = insert_transaction(
+    let txn_id = match insert_transaction(
         &mut tx,
         &reference,
         "transfer",
@@ -592,7 +587,34 @@ pub(crate) async fn execute_transfer(
         spec.external_reference,
         metadata,
     )
-    .await?;
+    .await
+    {
+        Ok(id) => id,
+        // A concurrent transfer with the same idempotency key committed first;
+        // the unique index rejects this one. Return the winner's transaction —
+        // the same idempotent result a sequential replay gets from the
+        // pre-insert find — instead of a 409 or a second, fee-charging transfer.
+        // Returning here rolls this tx back, undoing any mandate reservation
+        // taken above.
+        Err(sqlx::Error::Database(db))
+            if db.code().as_deref() == Some("23505")
+                && db.constraint() == Some("idx_transactions_transfer_idempotency") =>
+        {
+            let key = spec
+                .idempotency_key
+                .expect("idempotency unique violation implies a key was sent");
+            let mandate = spec.agent.as_ref().map(|a| a.mandate_id);
+            let existing = find_by_idempotency_key(&state.pool, key, customer_id, mandate)
+                .await?
+                .ok_or_else(|| {
+                    AppError::Internal(
+                        "transfer idempotency conflict but no committed transfer found".to_string(),
+                    )
+                })?;
+            return load_transaction_response(&state.pool, existing).await;
+        }
+        Err(e) => return Err(e.into()),
+    };
 
     // from *debit* (−balance); to *credit* (+balance). Local-only: both accounts
     // map to the same `CustomerDeposits` GL role, so the aggregate effect nets to zero.
@@ -617,16 +639,24 @@ pub(crate) async fn execute_transfer(
     // idempotency hardening — backlog §8.D).
     if fee > Decimal::ZERO {
         let fee_ref = reference_number("FEE");
-        let fee_txn = insert_transaction(
-            &mut tx,
-            &fee_ref,
-            "fee",
-            fee,
-            &format!("transfer fee for {}", reference),
-            from.customer_id,
-            None,
-            json!({ "fee_for": txn_id }),
+        // Tagged like every other finance-engine posting (product / cost_centre /
+        // economic_event_id), so the reporting specs see transfer-fee revenue the
+        // same way they see the e-transfer fee. `insert_transaction` doesn't carry
+        // those columns, so the fee row is inserted directly (as charge_etransfer_fee does).
+        let fee_txn: Uuid = sqlx::query_scalar(
+            "INSERT INTO transactions \
+               (reference_number, transaction_type, amount, description, status, initiated_by, \
+                completed_at, metadata, product, cost_centre, economic_event_id) \
+             VALUES ($1,'fee',$2,$3,'completed',$4,CURRENT_TIMESTAMP,$5,'payment','payments',$6) \
+             RETURNING transaction_id",
         )
+        .bind(&fee_ref)
+        .bind(fee)
+        .bind(format!("transfer fee for {}", reference))
+        .bind(from.customer_id)
+        .bind(json!({ "fee_for": txn_id }))
+        .bind(Uuid::new_v4())
+        .fetch_one(&mut *tx)
         .await?;
         post_movement(
             &state,

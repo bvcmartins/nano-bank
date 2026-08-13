@@ -85,6 +85,43 @@ pub(crate) async fn tag_gl(tx: &mut PgTx<'_>, txn_id: Uuid, gl: &str) -> Result<
     Ok(())
 }
 
+/// Record which engine decision gated this row, the way `transactions.rs` does
+/// for deposit/withdrawal/transfer.
+///
+/// Without this the rails screened and then **threw the answer away**: the row
+/// existed, a real decision existed — possibly a block — and nothing connected
+/// them, so `fraud-link` answered nulls indistinguishable from a transaction
+/// nobody ever screened (#52). No endpoint could infer it back, because the
+/// bank recorded nowhere that screening had happened.
+///
+/// Runs inside the caller's transaction, so the linkage commits with the money
+/// or not at all — a pointer to a movement that rolled back is its own lie.
+///
+/// **Stamp only rows a screening actually gated.** A rail flow writes several
+/// (hold, then release/settle); `screen()` guarded the hold. Settlement steps
+/// are not separately screened, so leaving those null is correct — and it is
+/// what lets a null finally mean "not screened" rather than "not written down".
+pub(crate) async fn tag_fraud(
+    tx: &mut PgTx<'_>,
+    txn_id: Uuid,
+    fraud: &crate::fraud::gate::FraudLink,
+) -> Result<(), AppError> {
+    // Screening off, or the movement never reached the engine: there is no
+    // decision to point at, and writing an empty link would be worse than none.
+    if !fraud.screened {
+        return Ok(());
+    }
+    sqlx::query(
+        "UPDATE transactions SET metadata = jsonb_set(COALESCE(metadata,'{}'::jsonb), \
+         '{fraud}', $2::jsonb) WHERE transaction_id = $1",
+    )
+    .bind(txn_id)
+    .bind(fraud.metadata())
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 /// Reserve `amount` from `from` into the rail's clearing account.
 /// Local: Dr `from` / Cr CLEARING. GL: Dr Payable / Cr Payable.
 pub(crate) async fn hold(

@@ -53,6 +53,10 @@ pub struct Account {
 pub struct CreateAccountRequest {
     pub account_type: AccountType,
     pub initial_deposit: Option<Decimal>,
+    /// Replay guard: a retried "open account" call with the same
+    /// (customer, key) returns the original account instead of opening a
+    /// duplicate. See `idx_accounts_idempotency`.
+    pub idempotency_key: Option<String>,
 }
 
 // Account limits entity

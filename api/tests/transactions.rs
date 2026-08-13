@@ -806,3 +806,122 @@ async fn concurrent_double_reverse_yields_one_conflict() {
     // A single reversal took effect: back to 0.
     assert_eq!(balance(&c, &token, a).await, 0.0);
 }
+
+// ---------------------------------------------------------------------------
+// Idempotency race + fee tagging (follow-up to #17)
+// ---------------------------------------------------------------------------
+
+/// Two identical-key transfers fired together resolve to ONE transfer and ONE
+/// fee — not two. Before the partial unique index, both passed the
+/// find-then-insert check and each posted a transfer *and* a $1.50 fee (the
+/// §8.D gap #17 flagged). Now the loser trips the index (23505) and the handler
+/// returns the winner's transaction.
+#[tokio::test]
+async fn transfer_concurrent_same_key_posts_once() {
+    let c = client();
+    require_stack!(&c);
+    let (_customer, token) = session(&c).await;
+    let a = match funded_account(&c, &token, 500.0).await {
+        Some(a) => a,
+        None => return,
+    };
+    let b = create_account(&c, &token, "savings").await;
+    let key = format!("idem-conc-{}", Uuid::new_v4());
+    let body = json!({
+        "from_account_id": a, "to_account_id": b, "amount": 200.0,
+        "description": "concurrent dup", "idempotency_key": key
+    });
+
+    let (r1, r2) = tokio::join!(
+        post_json(&c, &token, "/api/v1/transactions/transfer", body.clone()),
+        post_json(&c, &token, "/api/v1/transactions/transfer", body.clone()),
+    );
+    assert!(r1.status().is_success(), "first: {}", r1.status());
+    assert!(r2.status().is_success(), "second: {}", r2.status());
+    let v1: Value = r1.json().await.unwrap();
+    let v2: Value = r2.json().await.unwrap();
+    assert_eq!(
+        v1["transaction_id"], v2["transaction_id"],
+        "both requests must resolve to the same single transfer"
+    );
+
+    // Charged exactly once: 500 - 200 - 1.50.
+    assert_eq!(
+        balance(&c, &token, a).await,
+        298.5,
+        "fee charged exactly once"
+    );
+    assert_eq!(balance(&c, &token, b).await, 200.0);
+
+    // And exactly one transfer row + one fee row persisted for the key.
+    if let Some(pool) = test_db().await {
+        let transfers: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM transactions \
+             WHERE transaction_type = 'transfer' AND metadata->>'idempotency_key' = $1",
+        )
+        .bind(&key)
+        .fetch_one(&pool)
+        .await
+        .expect("count transfers");
+        assert_eq!(transfers, 1, "exactly one transfer persisted for the key");
+
+        let transfer_id: Uuid = sqlx::query_scalar(
+            "SELECT transaction_id FROM transactions \
+             WHERE transaction_type = 'transfer' AND metadata->>'idempotency_key' = $1",
+        )
+        .bind(&key)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let fees: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM transaction_fees WHERE transaction_id = $1")
+                .bind(transfer_id)
+                .fetch_one(&pool)
+                .await
+                .expect("count fees");
+        assert_eq!(fees, 1, "the fee is charged exactly once");
+    }
+}
+
+/// The transfer fee carries the finance-engine tags (`product` / `cost_centre` /
+/// `economic_event_id`), so reporting that keys on them sees transfer-fee revenue
+/// the same way it sees the e-transfer fee. Not on the HTTP surface — DB-asserted.
+#[tokio::test]
+async fn transfer_fee_is_tagged_for_reporting() {
+    let c = client();
+    require_stack!(&c);
+    let (_customer, token) = session(&c).await;
+    let a = match funded_account(&c, &token, 500.0).await {
+        Some(a) => a,
+        None => return,
+    };
+    let b = create_account(&c, &token, "savings").await;
+    let key = format!("idem-tag-{}", Uuid::new_v4());
+    let resp = post_json(
+        &c,
+        &token,
+        "/api/v1/transactions/transfer",
+        json!({
+            "from_account_id": a, "to_account_id": b, "amount": 100.0,
+            "description": "tagged fee", "idempotency_key": key
+        }),
+    )
+    .await;
+    assert!(resp.status().is_success(), "transfer: {}", resp.status());
+    let transfer_id = txn_id(resp).await;
+
+    let Some(pool) = test_db().await else { return };
+    // The fee txn links back via metadata.fee_for = the transfer id.
+    let row: Option<(Option<String>, Option<String>, Option<Uuid>)> = sqlx::query_as(
+        "SELECT product, cost_centre, economic_event_id FROM transactions \
+         WHERE transaction_type = 'fee' AND metadata->>'fee_for' = $1",
+    )
+    .bind(transfer_id.to_string())
+    .fetch_optional(&pool)
+    .await
+    .expect("query fee txn tags");
+    let (product, cost_centre, event) = row.expect("a fee txn exists for the transfer");
+    assert_eq!(product.as_deref(), Some("payment"));
+    assert_eq!(cost_centre.as_deref(), Some("payments"));
+    assert!(event.is_some(), "fee carries an economic_event_id");
+}

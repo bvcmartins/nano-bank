@@ -91,6 +91,26 @@ async fn get_accounts(
     Ok(Json(summaries))
 }
 
+/// Replay lookup for an idempotent "open account": the prior account for this
+/// (customer, key), if any.
+async fn find_account_by_idempotency_key(
+    pool: &sqlx::PgPool,
+    customer_id: Uuid,
+    key: &str,
+) -> Result<Option<Account>, AppError> {
+    sqlx::query_as::<_, Account>(
+        "SELECT account_id, customer_id, account_number, account_type, currency,
+                balance, available_balance, status, interest_rate, overdraft_limit,
+                minimum_balance, created_at, updated_at, activated_at, closed_at
+         FROM accounts WHERE customer_id = $1 AND idempotency_key = $2",
+    )
+    .bind(customer_id)
+    .bind(key)
+    .fetch_optional(pool)
+    .await
+    .map_err(AppError::Database)
+}
+
 /// Open a new account for a customer.
 ///
 /// Inserts a row into `accounts` with the per-type interest rate and an `active`
@@ -104,6 +124,18 @@ async fn create_account(
 ) -> Result<(StatusCode, Json<AccountResponse>), AppError> {
     let terms = opening_terms(&payload.account_type);
 
+    // Idempotency replay: same (customer, key) returns the original account
+    // rather than opening a duplicate. Checked up front so a retry is cheap;
+    // the partial unique index closes the concurrent-retry race (handled below).
+    // 200, not 201: nothing new was created (mirrors transfer's replay convention).
+    if let Some(key) = payload.idempotency_key.as_deref() {
+        if let Some(existing) =
+            find_account_by_idempotency_key(&state.pool, auth.customer_id, key).await?
+        {
+            return Ok((StatusCode::OK, Json(existing.into())));
+        }
+    }
+
     // Retry a few times in the (vanishingly rare) event of an account-number clash.
     let mut last_err = None;
     for _ in 0..5 {
@@ -112,8 +144,8 @@ async fn create_account(
             r#"
             INSERT INTO accounts
                 (customer_id, account_number, account_type, interest_rate,
-                 overdraft_limit, available_balance, status, activated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, 'active', CURRENT_TIMESTAMP)
+                 overdraft_limit, available_balance, status, activated_at, idempotency_key)
+            VALUES ($1, $2, $3, $4, $5, $6, 'active', CURRENT_TIMESTAMP, $7)
             RETURNING
                 account_id, customer_id, account_number, account_type, currency,
                 balance, available_balance, status, interest_rate, overdraft_limit,
@@ -128,6 +160,7 @@ async fn create_account(
         // balance starts at its full limit, deposit accounts start at 0.
         .bind(terms.credit_limit)
         .bind(terms.credit_limit)
+        .bind(&payload.idempotency_key)
         .fetch_one(&state.pool)
         .await;
 
@@ -144,8 +177,23 @@ async fn create_account(
                 return Ok((StatusCode::CREATED, Json(account.into())));
             }
             Err(sqlx::Error::Database(db)) => match db.code().as_deref() {
-                // unique_violation on account_number: regenerate and retry.
+                // unique_violation: either the account_number clashed (regenerate
+                // and retry) or a concurrent request won the idempotency-key race
+                // (look up its result and hand back the same account).
                 Some("23505") => {
+                    if db.constraint() == Some("idx_accounts_idempotency") {
+                        if let Some(key) = payload.idempotency_key.as_deref() {
+                            if let Some(existing) =
+                                find_account_by_idempotency_key(&state.pool, auth.customer_id, key)
+                                    .await?
+                            {
+                                return Ok((StatusCode::OK, Json(existing.into())));
+                            }
+                        }
+                        return Err(AppError::Conflict(
+                            "idempotency_key already used".to_string(),
+                        ));
+                    }
                     last_err = Some(sqlx::Error::Database(db));
                     continue;
                 }

@@ -332,10 +332,25 @@ async fn authorize(
         ));
     }
 
+    // The hold carries the engine linkage across to capture. A card is screened
+    // HERE, but its `transactions` row is not written until capture — a separate
+    // request, where the FraudLink no longer exists. Without somewhere to rest
+    // the operation_id in between, a screened (possibly blocked) purchase is
+    // indistinguishable from one never screened, and the label pipeline reads it
+    // as "no decision existed" (#54).
+    //
+    // Only a real screening is recorded: `fraud_link` is None when the account
+    // pre-check missed, and `screened` is false when the backend is off. Writing
+    // an empty blob for those would assert a decision that does not exist.
+    let fraud_metadata = fraud_link
+        .as_ref()
+        .filter(|l| l.screened)
+        .map(|l| json!({ "fraud": l.metadata() }));
+
     let auth_id: Uuid = sqlx::query_scalar(
         r#"
-        INSERT INTO account_holds (account_id, amount, reason, reference_id, expires_at)
-        VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP + interval '7 days')
+        INSERT INTO account_holds (account_id, amount, reason, reference_id, expires_at, metadata)
+        VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP + interval '7 days', $5)
         RETURNING hold_id
         "#,
     )
@@ -343,6 +358,7 @@ async fn authorize(
     .bind(amount)
     .bind(format!("visa_auth:{}", merchant))
     .bind(reference_number("AUTH"))
+    .bind(fraud_metadata)
     .fetch_one(&mut *tx)
     .await?;
 
@@ -402,9 +418,9 @@ async fn capture(
     let mut tx = state.pool.begin().await?;
 
     // The hold doubles as the authorization. Must still be open (not captured).
-    let hold = sqlx::query_as::<_, (Uuid, Decimal, String)>(
+    let hold = sqlx::query_as::<_, (Uuid, Decimal, String, Option<serde_json::Value>)>(
         r#"
-        SELECT account_id, amount, reason
+        SELECT account_id, amount, reason, metadata
         FROM account_holds
         WHERE hold_id = $1 AND released_at IS NULL
         FOR UPDATE
@@ -415,7 +431,7 @@ async fn capture(
     .await?
     .ok_or_else(|| AppError::NotFound("authorization not found or already captured".to_string()))?;
 
-    let (card_id, amount, reason) = hold;
+    let (card_id, amount, reason, auth_metadata) = hold;
     let merchant = reason
         .strip_prefix("visa_auth:")
         .unwrap_or(&reason)
@@ -432,6 +448,15 @@ async fn capture(
     let _clearing = fetch_account_for_update(&mut tx, system.visa_clearing_id).await?;
 
     let reference = reference_number("VISA");
+    // Carry the authorization's engine linkage onto the money row (#54). Capture
+    // does NOT re-screen — it settles a decision already made — so this must be
+    // the operation_id minted at authorize. A fresh id appearing here would mean
+    // something screened silently, which is worth noticing rather than papering
+    // over.
+    let mut metadata = json!({ "merchant": merchant, "auth_id": req.auth_id, "settled": false });
+    if let Some(fraud) = auth_metadata.as_ref().and_then(|m| m.get("fraud")) {
+        metadata["fraud"] = fraud.clone();
+    }
     let txn_id: Uuid = sqlx::query_scalar(
         r#"
         INSERT INTO transactions
@@ -445,7 +470,7 @@ async fn capture(
     .bind(amount)
     .bind(format!("Card purchase — {}", merchant))
     .bind(card.customer_id)
-    .bind(json!({ "merchant": merchant, "auth_id": req.auth_id, "settled": false }))
+    .bind(metadata)
     .fetch_one(&mut *tx)
     .await?;
 

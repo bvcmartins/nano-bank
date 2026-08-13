@@ -35,23 +35,52 @@ pub fn ops_lever_routes() -> Router<AppState> {
         .route("/flush-notifications", post(flush_notifications))
 }
 
-/// Append one entry to the tamper-evident agent-action ledger (actor `coo`).
-/// The JSON is passed as text and cast to `jsonb` server-side, mirroring the
-/// CFO's Python writer. A failure here is surfaced to the caller — an
-/// autonomous action must never land without its audit row.
-async fn audit(
+/// Record the attempt in the tamper-evident agent-action ledger (actor `coo`)
+/// and return the outcome to the caller. The JSON is passed as text and cast to
+/// `jsonb` server-side, mirroring the CFO's Python writer.
+///
+/// The action already ran (or was deterministically refused) before we get here;
+/// the levers reuse each rail's `*_inner` handler, which commits in its own
+/// transaction, and the notification drainer deliberately commits per item under
+/// `FOR UPDATE SKIP LOCKED` — so the audit cannot share one transaction with the
+/// action. We make the failure modes honest instead:
+///
+/// - **Refused** (nothing executed): if the audit write fails, surface it (`?`).
+///   Nothing moved, so a retry is safe and correct.
+/// - **Executed** (money/state already moved): the action is the primary effect
+///   and it is real. Reporting it as a 500 because a *secondary* bookkeeping
+///   write failed would be a lie that drives a retry — which self-verify then
+///   turns into a misleading "refused" entry, so the real action would vanish
+///   from the ledger twice over. Instead we log the complete record at ERROR
+///   (recoverable — actor/action/params/effect) and still return the true
+///   outcome. The ledger gap is loud in the logs, never silent.
+async fn finalize(
     pool: &DatabasePool,
     action: &str,
     params: &Value,
-    effect: &Value,
-) -> Result<(), AppError> {
-    sqlx::query("SELECT append_agent_action('coo', $1, $2::jsonb, $3::jsonb)")
+    outcome: Value,
+) -> Result<Json<Value>, AppError> {
+    let res = sqlx::query("SELECT append_agent_action('coo', $1, $2::jsonb, $3::jsonb)")
         .bind(action)
         .bind(params.to_string())
-        .bind(effect.to_string())
+        .bind(outcome.to_string())
         .execute(pool)
-        .await?;
-    Ok(())
+        .await;
+
+    if let Err(e) = res {
+        let executed = outcome.get("outcome").and_then(Value::as_str) == Some("executed");
+        if !executed {
+            return Err(AppError::from(e)); // nothing ran; fail the call, safe to retry
+        }
+        // The action landed. Never misreport it; make the missing audit row loud.
+        tracing::error!(
+            error = %e, actor = "coo", action,
+            params = %params, effect = %outcome,
+            "UNAUDITED EXECUTED ACTION: agent-action ledger write failed after the \
+             action committed — record preserved here for recovery"
+        );
+    }
+    Ok(Json(outcome))
 }
 
 fn executed(effect: Value) -> Value {
@@ -84,8 +113,7 @@ async fn cut_aft_batch(
         }
         _ => refused("no open outbound AFT batch with entries to cut"),
     };
-    audit(&state.pool, "cut_aft_batch", &params, &outcome).await?;
-    Ok(Json(outcome))
+    finalize(&state.pool, "cut_aft_batch", &params, outcome).await
 }
 
 /// Sweep expired (unclaimed) Interac e-Transfers, refunding the senders — only
@@ -108,8 +136,7 @@ async fn sweep_expired_etransfers(
     } else {
         refused("no expired e-Transfers to sweep")
     };
-    audit(&state.pool, "sweep_expired_etransfers", &params, &outcome).await?;
-    Ok(Json(outcome))
+    finalize(&state.pool, "sweep_expired_etransfers", &params, outcome).await
 }
 
 /// Reject Lynx wires stuck in `sent` past the stale threshold, refunding the
@@ -133,8 +160,7 @@ async fn reject_stale_wires(
     } else {
         refused("no stale wires to reject")
     };
-    audit(&state.pool, "reject_stale_wires", &params, &outcome).await?;
-    Ok(Json(outcome))
+    finalize(&state.pool, "reject_stale_wires", &params, outcome).await
 }
 
 /// Drain the Interac notification outbox — only if there is at least one
@@ -158,6 +184,5 @@ async fn flush_notifications(
     } else {
         refused("no undelivered notifications to flush")
     };
-    audit(&state.pool, "flush_notifications", &params, &outcome).await?;
-    Ok(Json(outcome))
+    finalize(&state.pool, "flush_notifications", &params, outcome).await
 }
