@@ -47,6 +47,8 @@ _STYLES = {
     "executed":  ("EXECUTED", "#1a7f37"),
     "refused":   ("REFUSED", "#b35900"),
     "deferred":  ("DEFERRED", "#6639ba"),
+    "delegated": ("DELEGATED", "#0969da"),
+    "failed":    ("FAILED", "#cf222e"),
     "read_only": ("READ-ONLY", "#57606a"),
 }
 

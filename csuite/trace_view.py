@@ -46,7 +46,7 @@ def extract_highlights(trace: list[dict]) -> dict:
 
 import re  # noqa: E402
 
-_LEVER_TOOLS = {"execute_rollback", "execute_rollout_restart"}
+_LEVER_TOOLS = {"execute_rollback", "execute_rollout_restart", "delegate_coding_task"}
 
 
 def beat_outcome(trace: list[dict], outcome_hint: str | None = None) -> dict:
@@ -63,6 +63,19 @@ def beat_outcome(trace: list[dict], outcome_hint: str | None = None) -> dict:
 
     text = last.get("output")
     text = text if isinstance(text, str) else str(text)
+
+    # The delegation lever carries a richer outcome set: executed -> a gated PR was
+    # opened (kind 'delegated', PR url as detail), 'failed' (coder error, no PR), or
+    # 'refused'. Parse it before the binary restart/rollback path below.
+    if last.get("name") == "delegate_coding_task":
+        low = text.lower()
+        if "executed" in low:
+            m = re.search(r"pr_url['\"]?\s*[:=]\s*['\"]?(https?://[^'\"\s,}]+)", text)
+            return {"kind": "delegated", "detail": (m.group(1) if m else "PR opened")}
+        m = re.search(r"reason['\"]?\s*[:=]\s*['\"]([^'\"]+)", text)
+        detail = m.group(1) if m else ""
+        return {"kind": "failed" if "failed" in low else "refused", "detail": detail}
+
     kind = "refused" if "refused" in text.lower() else "executed"
 
     detail = ""

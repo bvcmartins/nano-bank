@@ -36,3 +36,11 @@ def test_outcome_style_labels():
     assert outcome_style("refused")[0] == "REFUSED"
     assert outcome_style("read_only")[0] == "READ-ONLY"
     assert outcome_style("deferred")[0] == "DEFERRED"
+
+
+def test_outcome_style_delegated():
+    assert outcome_style("delegated") == ("DELEGATED", "#0969da")
+
+
+def test_outcome_style_failed():
+    assert outcome_style("failed") == ("FAILED", "#cf222e")

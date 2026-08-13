@@ -37,3 +37,24 @@ def test_last_lever_event_wins():
     trace = [_tool("execute_rollout_restart", '{"outcome":"refused","reason":"healthy"}'),
              _tool("execute_rollback", '{"outcome":"executed","effect":{"rolled_back_to":16}}')]
     assert beat_outcome(trace)["kind"] == "executed"
+
+
+def _delegate_ev(output):
+    return [{"kind": "tool", "name": "delegate_coding_task", "output": output}]
+
+
+def test_beat_outcome_delegated_executed_with_pr():
+    ev = _delegate_ev({"outcome": "executed", "pr_url": "https://github.com/o/r/pull/7"})
+    got = beat_outcome(ev)
+    assert got["kind"] == "delegated"
+    assert "pull/7" in got["detail"]
+
+
+def test_beat_outcome_delegate_failed():
+    ev = _delegate_ev({"outcome": "failed", "reason": "coder unreachable"})
+    assert beat_outcome(ev)["kind"] == "failed"
+
+
+def test_beat_outcome_delegate_refused():
+    ev = _delegate_ev({"outcome": "refused", "reason": "no signal"})
+    assert beat_outcome(ev)["kind"] == "refused"
