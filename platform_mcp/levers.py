@@ -30,6 +30,22 @@ def _is_stalled(deployment: dict) -> bool:
     return False
 
 
+def remediation_signal_present(deployments: list, pods: list, allow_list,
+                               threshold: int = 5) -> bool:
+    """True iff some allow-listed deployment is unhealthy right now (degraded,
+    crashlooping, or stalled) — the observed failing platform signal that a
+    kind='remediation' delegation requires. Same reads Phase B self-verifies on."""
+    allowed = set(allow_list)
+    for d in deployments:
+        if (d.get("cluster"), d.get("name")) not in allowed:
+            continue
+        if _is_stalled(d):
+            return True
+        if restart_warranted(d, pods, threshold):
+            return True
+    return False
+
+
 def rollback_warranted(deployment: dict, replicasets: list[dict]) -> tuple[bool, int | None]:
     """Roll back iff the rollout is stalled AND a prior ReplicaSet revision exists.
     Target = the second-highest revision owned by this deployment (the previous

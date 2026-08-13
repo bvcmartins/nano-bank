@@ -60,3 +60,27 @@ def test_rollback_not_warranted_when_progressing_normally():
         {"type": "Progressing", "status": "True", "reason": "NewReplicaSetAvailable"}])
     ok, target = levers.rollback_warranted(dep, [_rs("a", "cfo", 4), _rs("b", "cfo", 5)])
     assert ok is False and target is None
+
+
+_ALLOW = [("nano-bank", "cfo")]
+
+
+def test_remediation_signal_true_when_degraded():
+    deps = [_dep("cfo", 2, 1)]
+    assert levers.remediation_signal_present(deps, [], _ALLOW) is True
+
+
+def test_remediation_signal_false_when_all_healthy():
+    deps = [_dep("cfo", 2, 2)]
+    assert levers.remediation_signal_present(deps, [], _ALLOW) is False
+
+
+def test_remediation_signal_ignores_non_allowlisted():
+    deps = [_dep("postgres", 2, 0)]        # degraded but NOT allow-listed
+    assert levers.remediation_signal_present(deps, [], _ALLOW) is False
+
+
+def test_remediation_signal_true_when_stalled():
+    deps = [_dep("cfo", 1, 1, conditions=[
+        {"type": "Progressing", "reason": "ProgressDeadlineExceeded"}])]
+    assert levers.remediation_signal_present(deps, [], _ALLOW) is True
