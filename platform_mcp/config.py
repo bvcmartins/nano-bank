@@ -53,6 +53,9 @@ class Settings:
     bank_api: str
     service_client_secret: str
     restart_threshold: int
+    coder_url: str
+    coder_timeout: float
+    coder_sandbox_repo: str
 
     @classmethod
     def from_env(cls, env: Optional[Mapping[str, str]] = None) -> "Settings":
@@ -72,4 +75,7 @@ class Settings:
             bank_api=e.get("NANO_BANK_API", "http://bank-api:8081"),
             service_client_secret=e.get("SERVICE_CLIENT_SECRET", ""),
             restart_threshold=int(e.get("RESTART_THRESHOLD", "5")),
+            coder_url=e.get("CODER_URL", "http://coder:8096"),
+            coder_timeout=float(e.get("CODER_TIMEOUT", "900")),
+            coder_sandbox_repo=e.get("CODER_SANDBOX_REPO", "bvcmartins/cto-sandbox"),
         )

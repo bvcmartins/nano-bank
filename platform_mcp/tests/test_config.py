@@ -54,3 +54,9 @@ def test_lever_settings_override():
     assert s.actor_contexts == [("ctxA-actor", "a")]
     assert s.bank_api == "http://x:1"
     assert s.restart_threshold == 9
+
+
+def test_coder_defaults():
+    s = Settings.from_env({})
+    assert s.coder_url == "http://coder:8096"
+    assert s.coder_sandbox_repo == "bvcmartins/cto-sandbox"
