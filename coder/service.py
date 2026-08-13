@@ -1,0 +1,142 @@
+"""The coder service orchestration: turn (kind, task) into a PR-gated PR against
+the sandbox. Clone -> point the ported coder at the checkout -> agentic loop that
+edits repo files and re-verifies against the repo's OWN pytest -> self-verify
+gate (green -> branch+commit+push+gh pr create; red -> failed, no PR). All IO is
+behind `Seams` so it tests offline with a fake model + a temp git repo."""
+from __future__ import annotations
+import logging
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Callable, Optional
+
+from langchain_core.messages import HumanMessage
+
+from .config import Settings
+from . import coding_agent as ca
+from . import git_ops
+
+log = logging.getLogger("coder.service")
+
+_MAX_ROUNDS = int(os.environ.get("CODER_MAX_ROUNDS", "3"))
+
+
+@dataclass
+class Seams:
+    clone: Callable
+    run_agent: Callable
+    run_repo_tests: Callable
+    git_publish: Callable
+    now: Callable
+
+
+# --- default (real) seams ----------------------------------------------------
+
+def _now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _clone(settings: Settings, dest: str) -> str:
+    url = settings.sandbox_clone_url
+    if settings.gh_token and url.startswith("https://github.com/"):
+        url = url.replace("https://github.com/",
+                          f"https://x-access-token:{settings.gh_token}@github.com/")
+    subprocess.run(["git", "clone", "--depth", "1", url, dest],
+                   check=True, capture_output=True, text=True)
+    return dest
+
+
+def _run_repo_tests(checkout: str, settings: Settings) -> dict:
+    p = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=checkout,
+                       capture_output=True, text=True, timeout=settings.test_timeout)
+    out = (p.stdout + p.stderr)
+    mp, mf = re.search(r"(\d+) passed", out), re.search(r"(\d+) failed", out)
+    return {"all_passed": p.returncode == 0,
+            "passed": int(mp.group(1)) if mp else 0,
+            "failed": int(mf.group(1)) if mf else (0 if p.returncode == 0 else 1),
+            "stdout": out[-4000:]}
+
+
+def _run_agent(task: str, feedback: str, checkout: str, settings: Settings) -> None:
+    """One agentic pass: let the coder read the failing tests and edit repo files
+    in place using its tools. Uses the ported build_agent_graph over TOOLS_BASE."""
+    ca.set_workspace(checkout)
+    graph = ca.build_agent_graph(ca.TOOLS_BASE, system=ca.CODER_SYSTEM_PROMPT, role="fast")
+    prompt = (
+        f"TASK ({task}).\n\nYou are working inside an existing Python repo at the "
+        "workspace root. The repo has a pytest suite. Read the relevant files and "
+        "the failing test, then EDIT the repo's source files in place using "
+        "write_file to make `python -m pytest -q` pass. Do not create a new "
+        "solution file; fix the real files. Verify with run_tests/bash as you go.\n\n"
+        f"CURRENT TEST OUTPUT (verbatim ground truth):\n{feedback[:2000]}")
+    graph.invoke({"messages": [HumanMessage(prompt)]},
+                 config=ca.run_config("code-task", recursion_limit=2 * ca.MAX_ITERATIONS))
+
+
+def _git_publish(checkout: str, branch: str, title: str, body: str,
+                 settings: Settings) -> str:
+    env = dict(os.environ)
+    if settings.gh_token:
+        env["GH_TOKEN"] = settings.gh_token
+
+    def run(args):
+        return subprocess.run(args, cwd=checkout, check=True,
+                              capture_output=True, text=True, env=env)
+
+    run(["git", "checkout", "-b", branch])
+    run(["git", "-c", "user.email=coder@nano.bank", "-c", "user.name=nano-bank coder",
+         "commit", "-am", title])
+    run(["git", "push", "-u", "origin", branch])
+    r = run(["gh"] + git_ops.pr_create_args(head=branch, base=settings.pr_base,
+                                            title=title, body=body))
+    return r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""
+
+
+def default_seams() -> Seams:
+    return Seams(clone=_clone, run_agent=_run_agent, run_repo_tests=_run_repo_tests,
+                 git_publish=_git_publish, now=_now)
+
+
+# --- orchestration -----------------------------------------------------------
+
+def run_code_task(kind: str, task: str, *, settings: Settings,
+                  seams: Optional[Seams] = None) -> dict:
+    seams = seams or default_seams()
+    ts = seams.now()
+    work = tempfile.mkdtemp(prefix="coder-", dir=_ensure_root(settings))
+    checkout = os.path.join(work, "repo")
+    try:
+        checkout = seams.clone(settings, checkout) or checkout
+        tests = seams.run_repo_tests(checkout, settings)          # capture the contract
+        rounds = 0
+        while not tests["all_passed"] and rounds < _MAX_ROUNDS:
+            rounds += 1
+            seams.run_agent(task, tests["stdout"], checkout, settings)
+            tests = seams.run_repo_tests(checkout, settings)
+        summary = f"{kind}: {task[:120]}"
+        if not tests["all_passed"]:
+            return git_ops.code_task_result(
+                "failed", tests=f"{tests['passed']}p/{tests['failed']}f",
+                summary=summary, reason="repo tests still red after coder rounds")
+        branch = git_ops.branch_slug(task, ts)
+        body = (f"Delegated by the Agent CTO (kind: {kind}).\n\nTask: {task}\n\n"
+                "Authored by the coder against the sandbox; repo tests are green. "
+                "PR-gated — a human reviews and merges.")
+        pr_url = seams.git_publish(checkout, branch, title=summary, body=body,
+                                   settings=settings)
+        return git_ops.code_task_result(
+            "executed", pr_url=pr_url or None, branch=branch,
+            tests=f"{tests['passed']}p/{tests['failed']}f", summary=summary)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def _ensure_root(settings: Settings) -> str:
+    Path(settings.workspace_root).mkdir(parents=True, exist_ok=True)
+    return settings.workspace_root
