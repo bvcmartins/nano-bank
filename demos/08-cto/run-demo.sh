@@ -70,6 +70,8 @@ if [ "$ONLY_DOWN" = "1" ]; then
   echo "🧹 tearing down CTO-demo port-forwards + restoring $VICTIM ..."
   pkill -f "port-forward.*svc/(bank-api|cto|postgres-service)" 2>/dev/null || true
   restore_victim
+  # Close any PRs the delegation beats opened and reset the sandbox to baseline.
+  demos/08-cto/reseed-sandbox.sh || true
   trap - EXIT
   exit 0
 fi
@@ -118,6 +120,13 @@ if [ "$DO_BREAK" = "1" ]; then
     if [ "$reason" = "ProgressDeadlineExceeded" ]; then echo "   stalled ✓"; break; fi
     sleep 3
   done
+fi
+
+# Reseed the delegation sandbox so beats 8-9 open PRs against a clean baseline
+# (close stale cto/* PRs + branches). Best-effort: a skip if the sandbox/gh isn't
+# provisioned, so a levers-only run (--beats 6,7) is unaffected.
+if [ "$DO_BREAK" = "1" ]; then
+  demos/08-cto/reseed-sandbox.sh || echo "⚠ sandbox reseed skipped (gh/sandbox not provisioned)"
 fi
 
 # Drive the narrated arc. The driver only speaks HTTP to the CTO, so it needs

@@ -84,6 +84,33 @@ BEATS = [
                    "returned.",
         "thread": "new",
     },
+    {
+        "title": "Durable remediation — the CTO delegates the root-cause fix as a gated PR",
+        "shows": "rollback stopped the bleeding; now the CTO delegates the DURABLE "
+                 "code fix. It calls delegate_coding_task(kind='remediation') — the "
+                 "coder authors the fix in the sandbox, its own pytest goes green, and "
+                 "a real PR-gated PR is opened (a human merges). The delegation is "
+                 "audited in the same tamper-evident ledger.",
+        "message": "You rolled cfo back — good. Now open the durable fix: delegate the "
+                   "root-cause code change to the coder as a gated pull request. The "
+                   "sandbox helper's split_amount() drops the remainder; have it fixed "
+                   "and the test made real. Don't merge it — a human will. Tell me the "
+                   "outcome and the PR link.",
+        "thread": "new",
+        "outcome_hint": "delegated",
+    },
+    {
+        "title": "Delivery — the CTO delegates a backlog task as a gated PR",
+        "shows": "the same lever for planned work: handed a backlog item, the CTO "
+                 "delegates it (kind='delivery'). The coder implements it against the "
+                 "sandbox suite and opens a gated PR — audited, human-merged.",
+        "message": "Backlog task: implement the flat $1.50 e-transfer fee helper "
+                   "(etransfer_fee) in the sandbox service and make its skipped test "
+                   "pass. Delegate it as a gated PR — don't merge. Report the outcome "
+                   "and the PR link.",
+        "thread": "new",
+        "outcome_hint": "delegated",
+    },
 ]
 
 if __name__ == "__main__":
