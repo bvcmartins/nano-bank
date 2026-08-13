@@ -36,3 +36,6 @@ PLAN-*.md
 .venv
 # git worktrees created for isolated feature work
 .claude/worktrees/
+
+# coder module's default WORKSPACE when imported outside the service
+coder_workspace/
