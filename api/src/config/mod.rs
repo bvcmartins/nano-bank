@@ -34,11 +34,17 @@ pub struct FinanceSettings {
     /// Flat fee charged per outgoing e-transfer. Default $1.50.
     #[serde(with = "rust_decimal::serde::str", default = "default_etransfer_fee")]
     pub etransfer_fee: Decimal,
+    /// Flat fee charged per outgoing internal transfer. Default $1.50.
+    #[serde(with = "rust_decimal::serde::str", default = "default_transfer_fee")]
+    pub transfer_fee: Decimal,
     /// Monthly account-maintenance fee. Default $4.00.
     #[serde(with = "rust_decimal::serde::str", default = "default_maintenance_fee")]
     pub maintenance_fee: Decimal,
     /// Maintenance fee is waived at/above this balance. Default $3000.
-    #[serde(with = "rust_decimal::serde::str", default = "default_maintenance_waiver")]
+    #[serde(
+        with = "rust_decimal::serde::str",
+        default = "default_maintenance_waiver"
+    )]
     pub maintenance_waiver: Decimal,
 }
 
@@ -46,6 +52,9 @@ fn default_interchange_bps() -> Decimal {
     Decimal::new(150, 0)
 }
 fn default_etransfer_fee() -> Decimal {
+    Decimal::new(150, 2)
+}
+fn default_transfer_fee() -> Decimal {
     Decimal::new(150, 2)
 }
 fn default_maintenance_fee() -> Decimal {
@@ -60,6 +69,7 @@ impl Default for FinanceSettings {
         Self {
             interchange_bps: default_interchange_bps(),
             etransfer_fee: default_etransfer_fee(),
+            transfer_fee: default_transfer_fee(),
             maintenance_fee: default_maintenance_fee(),
             maintenance_waiver: default_maintenance_waiver(),
         }
@@ -72,6 +82,7 @@ impl Settings {
         crate::finance::FinanceConfig {
             interchange_bps: self.finance.interchange_bps,
             etransfer_fee: self.finance.etransfer_fee,
+            transfer_fee: self.finance.transfer_fee,
             maintenance_fee: self.finance.maintenance_fee,
             maintenance_waiver: self.finance.maintenance_waiver,
         }
@@ -105,6 +116,17 @@ pub struct FraudSettings {
     /// in a cron-triggered drain where a couple of seconds is fine.
     #[serde(default = "default_outcomes_timeout_ms")]
     pub outcomes_timeout_ms: u64,
+    /// Honour an `X-Simulated-Time` header as the instant a decision is
+    /// measured at, instead of wall clock.
+    ///
+    /// **Off in any deployment where real money moves.** A caller-supplied
+    /// clock drives the engine's velocity windows, so a timestamp from last
+    /// week makes every window look empty — it turns off the primary lever the
+    /// engine has. This exists so a simulated corpus can be replayed with a
+    /// real time axis (fraud engine #21, which added the matching opt-in on
+    /// the other side); it is a backfill affordance, nothing more.
+    #[serde(default)]
+    pub accept_simulated_time: bool,
 }
 
 fn default_fraud_backend() -> String {
@@ -136,6 +158,7 @@ impl Default for FraudSettings {
             fail_closed_above: default_fail_closed_above(),
             service_token: String::new(),
             outcomes_timeout_ms: default_outcomes_timeout_ms(),
+            accept_simulated_time: false,
         }
     }
 }

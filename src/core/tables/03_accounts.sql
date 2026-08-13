@@ -18,6 +18,7 @@ CREATE TABLE accounts (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
     activated_at TIMESTAMP WITH TIME ZONE,
     closed_at TIMESTAMP WITH TIME ZONE,
+    idempotency_key VARCHAR(255),
 
     -- Constraints
     CONSTRAINT chk_balance_precision CHECK (balance = ROUND(balance, 2)),
@@ -29,6 +30,13 @@ CREATE TABLE accounts (
     CONSTRAINT chk_minimum_balance CHECK (minimum_balance >= 0),
     CONSTRAINT chk_available_balance_logical CHECK (available_balance <= balance + overdraft_limit)
 );
+
+-- A retried "open account" request (same customer, same key) must not open a
+-- second account. NULLs are distinct in Postgres, so unkeyed requests never
+-- collide. Mirrors idx_aft_entries_idempotency / idx_lynx_wires_idempotency.
+CREATE UNIQUE INDEX idx_accounts_idempotency
+    ON accounts (customer_id, idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
 
 -- Account limits and restrictions
 CREATE TABLE account_limits (
@@ -75,6 +83,11 @@ CREATE TABLE account_holds (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
     expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
     released_at TIMESTAMP WITH TIME ZONE,
+    -- Same shape as transactions.metadata, and for card authorizations it holds
+    -- the same `fraud` blob. A card is screened at authorize but its
+    -- transactions row is not written until capture, a separate request, so the
+    -- engine linkage has to rest here in between or it is lost (#54).
+    metadata JSONB,
 
     -- Constraints
     CONSTRAINT chk_hold_amount_positive CHECK (amount > 0),

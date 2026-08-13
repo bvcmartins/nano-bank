@@ -197,6 +197,10 @@ async fn send_etransfer(
             &format!("Interac e-Transfer to {recipient_handle}"),
         )
         .await?;
+    // Record which decision gated this movement, in the same transaction that
+    // moves the money (#52). Without it the engine's ruling on this send is
+    // unreachable and reads as "never screened".
+    crate::rails::common::tag_fraud(&mut tx, hold.transaction_id, &fraud_link).await?;
     recompute_available(&mut tx, sender.account_id).await?;
 
     // Create the etransfer row (outbound, held).

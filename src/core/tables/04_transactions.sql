@@ -120,6 +120,16 @@ CREATE INDEX idx_transactions_type ON transactions(transaction_type);
 CREATE INDEX idx_transactions_initiated_by ON transactions(initiated_by);
 CREATE INDEX idx_transactions_created_at ON transactions(created_at);
 CREATE INDEX idx_transactions_external_ref ON transactions(external_reference);
+-- Idempotency guard for transfers: at most one transfer per
+-- (initiator, idempotency_key, mandate). Closes the find-then-insert race — a
+-- concurrent same-key transfer trips this instead of double-posting the transfer
+-- and its fee. NULLS NOT DISTINCT (PG16) so a customer transfer with no mandate
+-- still collapses duplicates. Partial: the separate `fee` row (type='fee', no
+-- idempotency_key) is excluded, and non-idempotent transfers are unconstrained.
+CREATE UNIQUE INDEX idx_transactions_transfer_idempotency
+    ON transactions (initiated_by, (metadata->>'idempotency_key'), (metadata->>'mandate_id'))
+    NULLS NOT DISTINCT
+    WHERE transaction_type = 'transfer' AND (metadata->>'idempotency_key') IS NOT NULL;
 
 -- Indexes for transaction_entries table
 CREATE INDEX idx_transaction_entries_transaction_id ON transaction_entries(transaction_id);
