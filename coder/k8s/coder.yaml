@@ -1,15 +1,33 @@
-# Coder service — LOCAL sandbox mode (no GitHub), sandbox HOSTED ON THE HOST.
-# The sandbox bare repo lives on the host at ~/dev/cto-sandbox.git and is served
-# to this in-cluster pod by `git daemon` (see coder/start-sandbox-daemon.sh). The
-# coder clones git://<host>:9418/cto-sandbox.git and, on green tests, pushes a
-# review branch back over receive-pack. You review/merge with PLAIN GIT on the host:
-#   git -C ~/dev/cto-sandbox.git log --oneline --all
-#   git -C ~/dev/cto-sandbox.git diff main..<branch>
-#   git -C ~/dev/cto-sandbox.git merge --ff-only <branch>
+# Coder service — LOCAL sandbox mode (no GitHub), sandbox IN-CLUSTER + CONTAINED.
 #
-# SANDBOX_CLONE_URL below is a placeholder; coder/k8s/deploy.sh overrides it with
-# the kind network gateway (the host address reachable from pods, e.g.
-# git://172.18.0.1:9418/cto-sandbox.git) at deploy time.
+# Containment posture (the coder runs MODEL-AUTHORED code, so treat it as hostile):
+#   * FS: no host mount; the sandbox is a bare repo on a PVC at /sandbox, seeded by
+#     an initContainer from the image's coder/sandbox-seed/. The model can read/write
+#     ONLY the sandbox + a /tmp scratch dir. Your other repos/files aren't present.
+#   * Secrets: only OLLAMA_API_KEY is injected (not the whole nano-agent-secrets),
+#     and it is scrubbed from every subprocess that runs model code (see sandbox_env).
+#   * Pod: non-root, read-only rootfs (only /tmp writable), all caps dropped, no
+#     privilege escalation, seccomp RuntimeDefault, no k8s API token.
+#   * Network: the coder needs NO host access (sandbox is in-cluster). Deny the pod
+#     from reaching your host + LAN with coder/k8s/egress-firewall.sh (kindnet does
+#     not enforce NetworkPolicy). Internet egress (ollama.com) stays open — harmless,
+#     since the pod can't read anything sensitive to exfiltrate.
+#
+# Review / merge a delegated change (host-initiated; no inbound pod->host):
+#   kubectl -n nano-bank exec deploy/coder -- git -C /sandbox log --oneline --all
+#   kubectl -n nano-bank exec deploy/coder -- git -C /sandbox diff main..<branch>
+#   kubectl -n nano-bank exec deploy/coder -- git -C /sandbox merge --ff-only <branch>
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: coder-sandbox
+  namespace: nano-bank
+spec:
+  accessModes: [ ReadWriteOnce ]
+  resources:
+    requests:
+      storage: 200Mi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -18,18 +36,55 @@ metadata:
   labels: { app: coder }
 spec:
   replicas: 1
+  strategy: { type: Recreate }        # RWO PVC — one pod at a time
   selector: { matchLabels: { app: coder } }
   template:
     metadata: { labels: { app: coder } }
     spec:
-      # The coder runs MODEL-AUTHORED code; contain the blast radius.
       automountServiceAccountToken: false      # no k8s API token in the pod
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
         runAsGroup: 1000
-        fsGroup: 1000
+        fsGroup: 1000                          # so uid 1000 can write the PVC
         seccompProfile: { type: RuntimeDefault }
+      initContainers:
+      - name: seed-sandbox
+        image: nano-coder:dev
+        imagePullPolicy: Never
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities: { drop: [ "ALL" ] }
+        env:
+        - { name: HOME, value: /tmp }
+        command: ["sh", "-c"]
+        args:
+          - |
+            set -e
+            if [ ! -e /sandbox/HEAD ]; then
+              echo "seeding bare sandbox repo at /sandbox ..."
+              git init --bare -b main /sandbox
+              tmp=$(mktemp -d)
+              cp -r /app/coder/sandbox-seed/. "$tmp"/
+              rm -f "$tmp"/provision-sandbox.sh
+              find "$tmp" \( -name __pycache__ -o -name '*.pyc' \) -exec rm -rf {} + 2>/dev/null || true
+              cd "$tmp"
+              git init -q -b main
+              git add -A
+              git -c user.email=coder@nano.bank -c user.name="nano-bank coder" \
+                  commit -qm "baseline: helper_service with two intentional gaps"
+              git tag baseline
+              git remote add origin /sandbox
+              git push -q -u origin main
+              git push -q origin baseline
+              echo "seeded."
+            else
+              echo "sandbox already initialised; leaving as-is."
+            fi
+        volumeMounts:
+        - { name: sandbox, mountPath: /sandbox }
+        - { name: work, mountPath: /tmp }
       containers:
       - name: coder
         image: nano-coder:dev
@@ -37,7 +92,7 @@ spec:
         ports: [ { containerPort: 8096 } ]
         securityContext:
           allowPrivilegeEscalation: false
-          readOnlyRootFilesystem: true         # only the writable /tmp emptyDir below is writable
+          readOnlyRootFilesystem: true         # only the /tmp + /sandbox mounts are writable
           capabilities: { drop: [ "ALL" ] }
         env:
         # Least privilege: ONLY the ollama key (not the whole nano-agent-secrets;
@@ -49,18 +104,22 @@ spec:
         - { name: CODER_MODEL_FALLBACK, value: kimi-k2.6 }
         - { name: SANDBOX_MODE,         value: local }
         - { name: SANDBOX_REPO,         value: cto-sandbox }
-        - { name: SANDBOX_CLONE_URL,    value: "git://SANDBOX_HOST:9418/cto-sandbox.git" }  # deploy.sh overrides SANDBOX_HOST
+        - { name: SANDBOX_CLONE_URL,    value: "file:///sandbox" }
         - { name: HOME,                 value: /tmp }
         - { name: CODER_WORKSPACE,      value: /tmp/coder-home }       # import-time default workspace
         - { name: CODER_WORKSPACE_ROOT, value: /tmp/coder-workspaces }  # per-task clones
         - { name: API_PORT,             value: "8096" }
         volumeMounts:
-        - { name: work, mountPath: /tmp }        # the only writable path (rootfs is read-only)
+        - { name: sandbox, mountPath: /sandbox }
+        - { name: work,    mountPath: /tmp }
         livenessProbe:
           httpGet: { path: /livez, port: 8096 }
           initialDelaySeconds: 5
           periodSeconds: 10
       volumes:
+      - name: sandbox
+        persistentVolumeClaim:
+          claimName: coder-sandbox
       - name: work
         emptyDir: {}
 ---

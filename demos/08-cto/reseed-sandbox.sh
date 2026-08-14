@@ -23,14 +23,16 @@ if [ "$MODE" = "github" ]; then
   exit 0
 fi
 
-# local (default): the sandbox is a host bare repo served by git daemon; drop stale
-# cto/* review branches directly with plain git.
-REPO_DIR="${SANDBOX_PATH:-$HOME/dev/cto-sandbox.git}"
-if [ ! -e "$REPO_DIR/HEAD" ]; then
-  echo "⚠ local sandbox $REPO_DIR not found — skipping reseed"; exit 0
+# local (default): the sandbox is an in-cluster PVC bare repo at /sandbox; drop
+# stale cto/* review branches via kubectl exec (host-initiated).
+CTX="${CTX:-kind-nano-bank}"
+NS="${NS:-nano-bank}"
+if ! kubectl --context "$CTX" -n "$NS" get deploy/coder >/dev/null 2>&1; then
+  echo "⚠ coder not deployed — skipping local reseed"; exit 0
 fi
-echo "🧽 reseeding the local sandbox ($REPO_DIR) ..."
-for b in $(git -C "$REPO_DIR" for-each-ref --format="%(refname:short)" refs/heads/ | grep "^cto/" || true); do
-  git -C "$REPO_DIR" branch -D "$b" >/dev/null 2>&1 || true
-done
+echo "🧽 reseeding the in-cluster local sandbox (/sandbox) ..."
+kubectl --context "$CTX" -n "$NS" exec deploy/coder -- sh -c '
+  for b in $(git -C /sandbox for-each-ref --format="%(refname:short)" refs/heads/ | grep "^cto/" || true); do
+    git -C /sandbox branch -D "$b" >/dev/null 2>&1 || true
+  done' 2>/dev/null || echo "⚠ local reseed skipped (coder not ready)"
 echo "   sandbox reset to baseline ✓"

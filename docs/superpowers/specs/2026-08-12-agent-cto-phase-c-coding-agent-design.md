@@ -3,15 +3,19 @@
 **Status:** design approved 2026-08-12. Successor to Phase A (analyst) and Phase B
 (infra levers: `execute_rollout_restart` / `execute_rollback`).
 
-**Update 2026-08-13 (local sandbox mode):** the artifact is now configurable via
-`SANDBOX_MODE`. The **default is `local`** — the sandbox is a **bare git repo on
-the host** (`~/dev/cto-sandbox.git`), served to the in-cluster coder by `git
-daemon` (git:// over the kind network gateway); a delegated change is published as
-a **review branch a human merges with plain git**, with no GitHub, no `gh`, and no
-token/egress. The coder stays an in-cluster peer; only the sandbox lives outside
-kind (mirroring how `github` mode's repo is external). `github` mode (a real
-`gh pr create` PR) is opt-in. Everything else below is unchanged; "open a PR"
-reads as "publish a gated review branch" in local mode.
+**Update 2026-08-13 (local sandbox mode + containment):** the artifact is
+configurable via `SANDBOX_MODE`; **default `local`** — the sandbox is an
+**in-cluster bare git repo on a PVC** (seeded by an initContainer). A delegated
+change is published as a **review branch a human merges** (host-initiated via
+`kubectl exec`), no GitHub / `gh` / token. `github` mode (real `gh pr create`) is
+opt-in. **Containment (the coder runs model-authored code, treated as hostile):**
+(1) no host mount — other repos/personal files aren't in the pod; (2) only
+`OLLAMA_API_KEY` injected, scrubbed from every subprocess that runs model code
+(`sandbox_env()`); (3) pod non-root, read-only rootfs, all caps dropped, no k8s API
+token; (4) network — the coder needs no host access, and `coder/k8s/egress-firewall.sh`
+(host iptables in DOCKER-USER; kindnet doesn't enforce NetworkPolicy) denies every
+kind pod from reaching the host + LAN while keeping pod-to-pod + internet. "Open a
+PR" reads as "publish a gated review branch" in local mode.
 
 ## Goal
 

@@ -13,18 +13,18 @@ docker build -f coder/Dockerfile -t nano-coder:dev .
 echo "📦 loading image into kind ..."
 kind load docker-image nano-coder:dev --name nano-bank
 
-# LOCAL sandbox mode (default): the bare repo lives ON THE HOST at
-# ~/dev/cto-sandbox.git, served to the pod by `git daemon` — no GitHub, no token.
-# The pod reaches the host at the kind network gateway (e.g. 172.18.0.1).
-HOST_GW="$(docker network inspect kind -f '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || echo 172.18.0.1)"
-echo "🌐 host git-daemon address for the pod: git://${HOST_GW}:9418/cto-sandbox.git"
-
+# LOCAL sandbox mode (default): the bare repo lives IN-CLUSTER on a PVC, seeded by
+# the manifest's initContainer — no GitHub, no token, and the coder needs NO host
+# access at all. (For github mode, create the coder-gh-token secret first; see
+# coder/README.md.)
 echo "🚀 applying coder manifest ..."
 kubectl --context "$CTX" apply -f coder/k8s/coder.yaml
-kubectl --context "$CTX" -n nano-bank set env deploy/coder \
-  "SANDBOX_CLONE_URL=git://${HOST_GW}:9418/cto-sandbox.git"
 kubectl --context "$CTX" -n nano-bank rollout status deploy/coder --timeout=120s
 
 echo
-echo "➡  Make sure the host sandbox daemon is running (serves ~/dev/cto-sandbox.git):"
-echo "     coder/start-sandbox-daemon.sh    # provisions the repo if missing, then runs git daemon"
+echo "🔒 CONTAINMENT: kindnet does not enforce NetworkPolicy. Deny the coder (and all"
+echo "   kind pods) from reaching this host + the LAN with the host firewall:"
+echo "     sudo coder/k8s/egress-firewall.sh"
+echo "   Review/merge a delegated change (host-initiated):"
+echo "     kubectl -n nano-bank exec deploy/coder -- git -C /sandbox diff main..<branch>"
+echo "     kubectl -n nano-bank exec deploy/coder -- git -C /sandbox merge --ff-only <branch>"
