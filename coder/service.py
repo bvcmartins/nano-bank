@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from langchain_core.messages import HumanMessage
+from langgraph.errors import GraphRecursionError
 
 from .config import Settings
 from . import coding_agent as ca
@@ -70,7 +71,13 @@ def _run_repo_tests(checkout: str, settings: Settings) -> dict:
 
 def _run_agent(task: str, feedback: str, checkout: str, settings: Settings) -> None:
     """One agentic pass: let the coder read the failing tests and edit repo files
-    in place using its tools. Uses the ported build_agent_graph over TOOLS_BASE."""
+    in place using its tools. Uses the ported build_agent_graph over TOOLS_BASE.
+
+    A single pass that doesn't converge within the recursion budget must NOT crash
+    the request: LangGraph raises GraphRecursionError when the ReAct loop runs long.
+    The coder's edits are persisted to disk by write_file as it goes, so we swallow
+    a non-terminating pass and let run_code_task's test-gate + change-check decide
+    (green+changed -> publish; otherwise a clean `failed`, never a 500)."""
     ca.set_workspace(checkout)
     graph = ca.build_agent_graph(ca.TOOLS_BASE, system=ca.CODER_SYSTEM_PROMPT, role="fast")
     prompt = (
@@ -78,10 +85,16 @@ def _run_agent(task: str, feedback: str, checkout: str, settings: Settings) -> N
         "workspace root. The repo has a pytest suite. Read the relevant files and "
         "the failing test, then EDIT the repo's source files in place using "
         "write_file to make `python -m pytest -q` pass. Do not create a new "
-        "solution file; fix the real files. Verify with run_tests/bash as you go.\n\n"
+        "solution file; fix the real files. Verify with run_tests/bash as you go. "
+        "Work efficiently: make the edit, run the tests once to confirm green, then "
+        "STOP — do not keep exploring after the suite passes.\n\n"
         f"CURRENT TEST OUTPUT (verbatim ground truth):\n{feedback[:2000]}")
-    graph.invoke({"messages": [HumanMessage(prompt)]},
-                 config=ca.run_config("code-task", recursion_limit=2 * ca.MAX_ITERATIONS))
+    try:
+        graph.invoke({"messages": [HumanMessage(prompt)]},
+                     config=ca.run_config("code-task", recursion_limit=6 * ca.MAX_ITERATIONS))
+    except GraphRecursionError:
+        log.warning("agentic pass hit the recursion limit without a stop condition; "
+                    "leaving edits on disk for the test-gate to judge")
 
 
 def _git_publish(checkout: str, branch: str, title: str, body: str,

@@ -156,4 +156,22 @@ echo "🩺 final $VICTIM state ..."
 # normal operational config (the EXIT trap also does this on an aborted run).
 kubectl --context "$CTX" -n "$NS" patch deploy/"$VICTIM" --type=merge \
   -p='{"spec":{"progressDeadlineSeconds":600}}' >/dev/null 2>&1 || true
-kubectl --context "$CTX" -n "$NS" rollout status deploy/"$VICTIM" --timeout=120s || true
+# Report health by AVAILABILITY, not `rollout status`: the staged incident leaves a
+# terminal ProgressDeadlineExceeded condition on the recovered deployment which
+# `rollout status` keeps echoing until the next reconcile — a misleading red error
+# as the demo's last line even though the rolled-back pods are up. Poll available
+# replicas instead so the closing line reflects reality.
+ok=0
+for _ in $(seq 1 40); do
+  avail=$(kubectl --context "$CTX" -n "$NS" get deploy/"$VICTIM" \
+    -o jsonpath='{.status.availableReplicas}' 2>/dev/null || echo 0)
+  want=$(kubectl --context "$CTX" -n "$NS" get deploy/"$VICTIM" \
+    -o jsonpath='{.spec.replicas}' 2>/dev/null || echo 1)
+  if [ "${avail:-0}" = "${want:-1}" ] && [ "${avail:-0}" != "0" ]; then ok=1; break; fi
+  sleep 3
+done
+if [ "$ok" = "1" ]; then
+  echo "   ✅ $VICTIM recovered — ${avail}/${want} replicas available"
+else
+  echo "   ⚠ $VICTIM not fully available yet (${avail:-0}/${want:-1}); check: kubectl -n $NS get deploy/$VICTIM"
+fi

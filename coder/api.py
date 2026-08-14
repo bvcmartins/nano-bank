@@ -1,11 +1,15 @@
 from __future__ import annotations
+import logging
 from typing import Callable, Optional
 
 from fastapi import FastAPI
 from pydantic import BaseModel
 
 from .config import Settings
+from .git_ops import code_task_result
 from .service import run_code_task as default_run
+
+log = logging.getLogger("coder.api")
 
 
 class CodeTaskRequest(BaseModel):
@@ -44,6 +48,15 @@ def create_app(settings: Settings, run_fn: Optional[Callable] = None,
 
     @app.post("/code-task")
     def code_task(req: CodeTaskRequest):
-        return run_fn(req.kind, req.task, settings)
+        # Never surface a raw 500 to the lever: any unexpected coder failure becomes
+        # a structured `failed` result so the CTO records a clean audited outcome
+        # (not "coder unreachable") and the demo keeps moving.
+        try:
+            return run_fn(req.kind, req.task, settings)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("coder run failed")
+            return code_task_result(
+                "failed", summary=f"{req.kind}: {req.task[:120]}",
+                reason=f"coder error: {type(exc).__name__}: {str(exc)[:200]}")
 
     return app

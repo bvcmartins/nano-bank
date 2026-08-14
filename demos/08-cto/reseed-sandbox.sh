@@ -31,8 +31,13 @@ if ! kubectl --context "$CTX" -n "$NS" get deploy/coder >/dev/null 2>&1; then
   echo "⚠ coder not deployed — skipping local reseed"; exit 0
 fi
 echo "🧽 reseeding the in-cluster local sandbox (/sandbox) ..."
+# Drop EVERY review branch except main (the coder — or a presenter — may create
+# arbitrary branch names, not just cto/*), and hard-reset main back to the
+# `baseline` tag so a merged delegation doesn't carry over between runs.
 kubectl --context "$CTX" -n "$NS" exec deploy/coder -- sh -c '
-  for b in $(git -C /sandbox for-each-ref --format="%(refname:short)" refs/heads/ | grep "^cto/" || true); do
+  git -C /sandbox update-ref refs/heads/main refs/tags/baseline >/dev/null 2>&1 || true
+  for b in $(git -C /sandbox for-each-ref --format="%(refname:short)" refs/heads/); do
+    [ "$b" = "main" ] && continue
     git -C /sandbox branch -D "$b" >/dev/null 2>&1 || true
   done' 2>/dev/null || echo "⚠ local reseed skipped (coder not ready)"
 echo "   sandbox reset to baseline ✓"
