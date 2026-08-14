@@ -47,7 +47,9 @@ def _clone(settings: Settings, dest: str) -> str:
     if settings.gh_token and url.startswith("https://github.com/"):
         url = url.replace("https://github.com/",
                           f"https://x-access-token:{settings.gh_token}@github.com/")
-    subprocess.run(["git", "clone", "--depth", "1", url, dest],
+    # Full (not shallow) clone: a shallow history can't push a branch back over
+    # git:// receive-pack ("shallow update not allowed"). The sandbox is tiny.
+    subprocess.run(["git", "clone", url, dest],
                    check=True, capture_output=True, text=True)
     return dest
 

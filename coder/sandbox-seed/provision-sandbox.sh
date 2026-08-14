@@ -8,7 +8,9 @@ SEED="$(cd "$(dirname "$0")" && pwd)"
 TMP="$(mktemp -d)"
 # copy everything except this provisioning script into the new repo
 cp -r "$SEED"/. "$TMP"/
-rm -f "$TMP/provision-sandbox.sh"
+rm -f "$TMP/provision-sandbox.sh" "$TMP/provision-local-sandbox.sh"
+find "$TMP" \( -name __pycache__ -o -name '*.pyc' -o -name .pytest_cache \) \
+     -exec rm -rf {} + 2>/dev/null || true
 cd "$TMP"
 git init -q && git add -A
 git -c user.email=coder@nano.bank -c user.name="nano-bank coder" \

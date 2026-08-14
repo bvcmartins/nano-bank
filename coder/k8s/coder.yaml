@@ -1,26 +1,15 @@
-# Coder service — LOCAL sandbox mode (no GitHub). The sandbox is a bare git repo
-# on a PVC mounted at /sandbox, seeded once by an initContainer from the image's
-# baked-in coder/sandbox-seed/. The coder clones file:///sandbox, and on green
-# pushes a review branch back to it. Review a delegated change with:
-#   kubectl -n nano-bank exec deploy/coder -- git -C /sandbox log --oneline --all
-#   kubectl -n nano-bank exec deploy/coder -- git -C /sandbox diff main..<branch>
-# and merge it (fast-forward) with:
-#   kubectl -n nano-bank exec deploy/coder -- git -C /sandbox merge --ff-only <branch>
+# Coder service — LOCAL sandbox mode (no GitHub), sandbox HOSTED ON THE HOST.
+# The sandbox bare repo lives on the host at ~/dev/cto-sandbox.git and is served
+# to this in-cluster pod by `git daemon` (see coder/start-sandbox-daemon.sh). The
+# coder clones git://<host>:9418/cto-sandbox.git and, on green tests, pushes a
+# review branch back over receive-pack. You review/merge with PLAIN GIT on the host:
+#   git -C ~/dev/cto-sandbox.git log --oneline --all
+#   git -C ~/dev/cto-sandbox.git diff main..<branch>
+#   git -C ~/dev/cto-sandbox.git merge --ff-only <branch>
 #
-# ALTERNATIVE (a literal host repo at ~/dev/cto-sandbox.git): recreate the kind
-# cluster with an extraMounts entry mapping that host dir to a node path, then
-# replace the `sandbox` volume below with a hostPath to it. Not required for local.
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: coder-sandbox
-  namespace: nano-bank
-spec:
-  accessModes: [ ReadWriteOnce ]
-  resources:
-    requests:
-      storage: 200Mi
----
+# SANDBOX_CLONE_URL below is a placeholder; coder/k8s/deploy.sh overrides it with
+# the kind network gateway (the host address reachable from pods, e.g.
+# git://172.18.0.1:9418/cto-sandbox.git) at deploy time.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -29,40 +18,10 @@ metadata:
   labels: { app: coder }
 spec:
   replicas: 1
-  strategy: { type: Recreate }        # RWO PVC — don't run two pods on it at once
   selector: { matchLabels: { app: coder } }
   template:
     metadata: { labels: { app: coder } }
     spec:
-      initContainers:
-      - name: seed-sandbox
-        image: nano-coder:dev
-        imagePullPolicy: Never
-        command: ["sh", "-c"]
-        args:
-          - |
-            set -e
-            if [ ! -e /sandbox/HEAD ]; then
-              echo "seeding bare sandbox repo at /sandbox ..."
-              git init --bare -b main /sandbox
-              tmp=$(mktemp -d)
-              cp -r /app/coder/sandbox-seed/. "$tmp"/
-              rm -f "$tmp/provision-sandbox.sh" "$tmp/provision-local-sandbox.sh"
-              cd "$tmp"
-              git init -q -b main
-              git add -A
-              git -c user.email=coder@nano.bank -c user.name="nano-bank coder" \
-                  commit -qm "baseline: helper_service with two intentional gaps"
-              git tag baseline
-              git remote add origin /sandbox
-              git push -q -u origin main
-              git push -q origin baseline
-              echo "seeded."
-            else
-              echo "sandbox already initialised; leaving as-is."
-            fi
-        volumeMounts:
-        - { name: sandbox, mountPath: /sandbox }
       containers:
       - name: coder
         image: nano-coder:dev
@@ -76,19 +35,13 @@ spec:
         - { name: CODER_MODEL_FALLBACK, value: kimi-k2.6 }
         - { name: SANDBOX_MODE,         value: local }
         - { name: SANDBOX_REPO,         value: cto-sandbox }
-        - { name: SANDBOX_CLONE_URL,    value: "file:///sandbox" }
+        - { name: SANDBOX_CLONE_URL,    value: "git://SANDBOX_HOST:9418/cto-sandbox.git" }  # deploy.sh overrides SANDBOX_HOST
         - { name: CODER_WORKSPACE_ROOT, value: /tmp/coder-workspaces }
         - { name: API_PORT,             value: "8096" }
-        volumeMounts:
-        - { name: sandbox, mountPath: /sandbox }
         livenessProbe:
           httpGet: { path: /livez, port: 8096 }
           initialDelaySeconds: 5
           periodSeconds: 10
-      volumes:
-      - name: sandbox
-        persistentVolumeClaim:
-          claimName: coder-sandbox
 ---
 apiVersion: v1
 kind: Service

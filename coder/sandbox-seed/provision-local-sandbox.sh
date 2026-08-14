@@ -14,9 +14,14 @@ if [ -e "$DEST/HEAD" ]; then
 fi
 
 git init --bare -b main -q "$DEST"
+# Allow the git daemon to serve + accept pushes to this repo (see start-sandbox-daemon.sh).
+touch "$DEST/git-daemon-export-ok"
+git -C "$DEST" config daemon.receivepack true
 TMP="$(mktemp -d)"
 cp -r "$SEED"/. "$TMP"/
 rm -f "$TMP"/provision-sandbox.sh "$TMP"/provision-local-sandbox.sh
+find "$TMP" \( -name __pycache__ -o -name '*.pyc' -o -name .pytest_cache \) \
+     -exec rm -rf {} + 2>/dev/null || true
 cd "$TMP"
 git init -q -b main && git add -A
 git -c user.email=coder@nano.bank -c user.name="nano-bank coder" \

@@ -7,10 +7,11 @@ merges** — the CTO/coder **never merge**.
 
 ## Sandbox modes
 
-- **`local` (default, no GitHub).** The sandbox is a **bare git repo on a PVC**
-  mounted at `/sandbox`, seeded once by the manifest's initContainer from
-  `coder/sandbox-seed/`. On green tests the coder pushes a branch `cto/<slug>-<ts>`
-  back to it; the "PR" is that local branch. No `gh`, no token, no GitHub egress.
+- **`local` (default, no GitHub).** The sandbox is a **bare git repo on the host**
+  (`~/dev/cto-sandbox.git`), served to the in-cluster coder by **`git daemon`**.
+  The coder clones `git://<host>:9418/cto-sandbox.git` and, on green tests, pushes a
+  branch `cto/<slug>-<ts>` back over receive-pack; the "PR" is that branch, which
+  you review and merge with **plain git in `~/dev`**. No `gh`, no token, no GitHub.
 - **`github` (opt-in, `SANDBOX_MODE=github`).** Clones `bvcmartins/cto-sandbox`
   and opens a real PR with `gh pr create` (needs the `coder-gh-token` secret +
   egress to github.com). Same self-verify gate and human-merge rule.
@@ -38,33 +39,38 @@ rounds → `failed`, no PR.
 
 ## Deploy (local mode — the default)
 
-No GitHub, no token. The initContainer seeds the PVC-backed bare repo on first
-start.
+No GitHub, no token. The sandbox is a host bare repo served by `git daemon`; the
+in-cluster coder reaches it at the kind network gateway (e.g. `172.18.0.1`).
 
 ```bash
 export XDG_RUNTIME_DIR=/run/user/1000 XDG_DATA_HOME=/home/bmartins/.local/share
+
+# 1) serve the host sandbox (provisions ~/dev/cto-sandbox.git on first run):
+./coder/start-sandbox-daemon.sh &          # git daemon on 0.0.0.0:9418
+
+# 2) deploy the coder (deploy.sh injects git://<gateway>:9418/cto-sandbox.git):
 ./coder/k8s/deploy.sh
-# then redeploy platform-mcp so it picks up the delegate_coding_task tool:
+
+# 3) redeploy platform-mcp so it picks up the delegate_coding_task tool:
 kubectl --context kind-nano-bank -n nano-bank rollout restart deploy/platform-mcp
 ```
 
+The daemon serves **only** `~/dev/cto-sandbox.git` (it carries a
+`git-daemon-export-ok` marker; nothing else under `~/dev` is exposed) and allows
+anonymous push to that one repo — fine for a local dev sandbox.
+
 ### Reviewing / merging a delegated change (local mode)
 
+Plain git, on the host:
+
 ```bash
-kubectl -n nano-bank exec deploy/coder -- git -C /sandbox log --oneline --all
-kubectl -n nano-bank exec deploy/coder -- git -C /sandbox diff main..<branch>
-kubectl -n nano-bank exec deploy/coder -- git -C /sandbox merge --ff-only <branch>
+git -C ~/dev/cto-sandbox.git log --oneline --all
+git -C ~/dev/cto-sandbox.git diff main..<branch>
+git -C ~/dev/cto-sandbox.git merge --ff-only <branch>
 ```
 
 `demos/08-cto/reseed-sandbox.sh` (called by `run-demo.sh`) drops stale `cto/*`
 branches before a run.
-
-### A literal host repo (optional)
-
-To back `/sandbox` with a bare repo on your disk instead of a PVC, recreate the
-kind cluster with an `extraMounts` entry mapping e.g. `~/dev/cto-sandbox.git` to a
-node path, provision it with `coder/sandbox-seed/provision-local-sandbox.sh`, and
-swap the manifest's `sandbox` volume for a `hostPath`.
 
 ## github mode (opt-in)
 

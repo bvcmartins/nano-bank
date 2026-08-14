@@ -4,11 +4,14 @@
 (infra levers: `execute_rollout_restart` / `execute_rollback`).
 
 **Update 2026-08-13 (local sandbox mode):** the artifact is now configurable via
-`SANDBOX_MODE`. The **default is `local`** — the sandbox is a bare git repo on a
-PVC (seeded by an initContainer), and a delegated change is published as a **review
-branch a human merges**, with no GitHub, no `gh`, and no token/egress. `github`
-mode (a real `gh pr create` PR) is opt-in. Everything else below is unchanged;
-"open a PR" reads as "publish a gated review branch" in local mode.
+`SANDBOX_MODE`. The **default is `local`** — the sandbox is a **bare git repo on
+the host** (`~/dev/cto-sandbox.git`), served to the in-cluster coder by `git
+daemon` (git:// over the kind network gateway); a delegated change is published as
+a **review branch a human merges with plain git**, with no GitHub, no `gh`, and no
+token/egress. The coder stays an in-cluster peer; only the sandbox lives outside
+kind (mirroring how `github` mode's repo is external). `github` mode (a real
+`gh pr create` PR) is opt-in. Everything else below is unchanged; "open a PR"
+reads as "publish a gated review branch" in local mode.
 
 ## Goal
 
