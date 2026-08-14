@@ -62,7 +62,15 @@ spec:
         args:
           - |
             set -e
-            if [ ! -e /sandbox/HEAD ]; then
+            # The PVC mount is root-owned (the provisioner made it); we run as uid
+            # 1000, so let git operate on it. Global config lives in HOME=/tmp
+            # (a shared emptyDir), so the main container's git sees it too.
+            git config --global --add safe.directory '*'
+            # Guard on a real commit (refs/heads/main), NOT just HEAD — `git init`
+            # creates HEAD immediately, so a partial/failed prior seed must re-seed.
+            if git -C /sandbox rev-parse --verify -q refs/heads/main >/dev/null 2>&1; then
+              echo "sandbox already initialised; leaving as-is."
+            else
               echo "seeding bare sandbox repo at /sandbox ..."
               git init --bare -b main /sandbox
               tmp=$(mktemp -d)
@@ -79,8 +87,6 @@ spec:
               git push -q -u origin main
               git push -q origin baseline
               echo "seeded."
-            else
-              echo "sandbox already initialised; leaving as-is."
             fi
         volumeMounts:
         - { name: sandbox, mountPath: /sandbox }
