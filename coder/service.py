@@ -99,8 +99,9 @@ def _git_publish(checkout: str, branch: str, title: str, body: str,
                               capture_output=True, text=True, env=env)
 
     run(["git", "checkout", "-b", branch])
+    run(["git", "add", "-A"])        # stage new + modified + deleted (not just tracked)
     run(["git", "-c", "user.email=coder@nano.bank", "-c", "user.name=nano-bank coder",
-         "commit", "-am", title])
+         "commit", "-m", title])
     run(["git", "push", "-u", "origin", branch])
     if settings.sandbox_mode == "local":
         # The review artifact is the pushed branch in the local bare repo. A human
@@ -126,13 +127,24 @@ def run_code_task(kind: str, task: str, *, settings: Settings,
     checkout = os.path.join(work, "repo")
     try:
         checkout = seams.clone(settings, checkout) or checkout
-        tests = seams.run_repo_tests(checkout, settings)          # capture the contract
+        tests = seams.run_repo_tests(checkout, settings)          # baseline (model's context)
+        # Always run the coder at least once — the TASK drives the work, not the
+        # test colour. A delivery task's contract may be a skipped/xfail test, so
+        # the baseline can be green; the model must still make (and verify) a change.
         rounds = 0
-        while not tests["all_passed"] and rounds < _MAX_ROUNDS:
+        changed = False
+        while rounds < _MAX_ROUNDS:
             rounds += 1
             seams.run_agent(task, tests["stdout"], checkout, settings)
             tests = seams.run_repo_tests(checkout, settings)
+            changed = _has_changes(checkout)
+            if tests["all_passed"] and changed:
+                break
         summary = f"{kind}: {task[:120]}"
+        if not changed:
+            return git_ops.code_task_result(
+                "failed", tests=f"{tests['passed']}p/{tests['failed']}f",
+                summary=summary, reason="coder produced no change")
         if not tests["all_passed"]:
             return git_ops.code_task_result(
                 "failed", tests=f"{tests['passed']}p/{tests['failed']}f",
@@ -148,6 +160,13 @@ def run_code_task(kind: str, task: str, *, settings: Settings,
             tests=f"{tests['passed']}p/{tests['failed']}f", summary=summary)
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+def _has_changes(checkout: str) -> bool:
+    """True iff the coder left uncommitted changes in the checkout (git status)."""
+    p = subprocess.run(["git", "status", "--porcelain"], cwd=checkout,
+                       capture_output=True, text=True)
+    return bool(p.stdout.strip())
 
 
 def _ensure_root(settings: Settings) -> str:

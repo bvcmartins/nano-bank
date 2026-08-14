@@ -94,3 +94,44 @@ def test_git_publish_local_pushes_branch_no_github(tmp_path):
     assert "cto/fix-T" in ref
     branches = subprocess.run(["git", "branch"], cwd=bare, capture_output=True, text=True).stdout
     assert "cto/fix-T" in branches                   # the branch really landed in the bare repo
+
+
+def test_green_baseline_still_runs_model_and_publishes(tmp_path):
+    """The delivery-task bug: baseline is GREEN (skipped/xfail contract), so the
+    model must still run and its change must be published."""
+    root = tmp_path / "repo"
+    root.mkdir(parents=True)
+    (root / "helper.py").write_text("def dbl(n):\n    return n + n\n")
+    (root / "test_helper.py").write_text(
+        "from helper import dbl\n\n\ndef test_dbl():\n    assert dbl(2) == 4\n")  # passes at baseline
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                    "commit", "-qm", "base"], cwd=root, check=True)
+    calls = []
+    ran = {"n": 0}
+
+    def clone(settings, dest):
+        return str(root)
+
+    def run_agent(task, feedback, co, settings):
+        ran["n"] += 1                              # model adds a new helper (green stays green)
+        (Path(co) / "helper.py").write_text(
+            "def dbl(n):\n    return n + n\n\n\ndef fee():\n    return 150\n")
+
+    def run_repo_tests(co, settings):
+        p = subprocess.run(["python", "-m", "pytest", "-q"], cwd=co,
+                           capture_output=True, text=True)
+        return {"all_passed": p.returncode == 0, "passed": 1, "failed": 0,
+                "stdout": p.stdout + p.stderr}
+
+    def git_publish(co, branch, title, body, settings):
+        calls.append(branch)
+        return f"{branch} @ file:///sandbox"
+
+    seams = svc.Seams(clone=clone, run_agent=run_agent, run_repo_tests=run_repo_tests,
+                      git_publish=git_publish, now=lambda: "T")
+    res = svc.run_code_task("delivery", "add fee", settings=Settings.from_env({}), seams=seams)
+    assert res["outcome"] == "executed"
+    assert ran["n"] >= 1                            # model ran even though baseline was green
+    assert len(calls) == 1
