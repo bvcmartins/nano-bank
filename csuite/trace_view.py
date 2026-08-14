@@ -70,8 +70,13 @@ def beat_outcome(trace: list[dict], outcome_hint: str | None = None) -> dict:
     if last.get("name") == "delegate_coding_task":
         low = text.lower()
         if "executed" in low:
-            m = re.search(r"pr_url['\"]?\s*[:=]\s*['\"]?(https?://[^'\"\s,}]+)", text)
-            return {"kind": "delegated", "detail": (m.group(1) if m else "PR opened")}
+            # pr_url is an https URL (github mode) or a local branch ref like
+            # "cto/x-T @ file:///sandbox" (local mode) — capture either.
+            m = re.search(r"pr_url['\"]?\s*[:=]\s*['\"]([^'\"]+)", text)
+            if not m:
+                m = re.search(r"pr_url['\"]?\s*[:=]\s*(https?://[^'\"\s,}]+)", text)
+            return {"kind": "delegated",
+                    "detail": (m.group(1).strip() if m and m.group(1).strip() else "PR opened")}
         m = re.search(r"reason['\"]?\s*[:=]\s*['\"]([^'\"]+)", text)
         detail = m.group(1) if m else ""
         return {"kind": "failed" if "failed" in low else "refused", "detail": detail}

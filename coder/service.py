@@ -81,6 +81,10 @@ def _run_agent(task: str, feedback: str, checkout: str, settings: Settings) -> N
 
 def _git_publish(checkout: str, branch: str, title: str, body: str,
                  settings: Settings) -> str:
+    """Commit the coder's work on a review branch and publish it. In 'local' mode
+    the branch is pushed back to the local bare sandbox repo (origin is a file://
+    path) and the returned 'pr_url' is a local branch reference — no GitHub, no gh.
+    In 'github' mode it additionally opens a gated PR with `gh pr create`."""
     env = dict(os.environ)
     if settings.gh_token:
         env["GH_TOKEN"] = settings.gh_token
@@ -93,6 +97,10 @@ def _git_publish(checkout: str, branch: str, title: str, body: str,
     run(["git", "-c", "user.email=coder@nano.bank", "-c", "user.name=nano-bank coder",
          "commit", "-am", title])
     run(["git", "push", "-u", "origin", branch])
+    if settings.sandbox_mode == "local":
+        # The review artifact is the pushed branch in the local bare repo. A human
+        # reviews it with `git diff <base>..<branch>` and merges by hand.
+        return f"{branch} @ {settings.sandbox_clone_url}"
     r = run(["gh"] + git_ops.pr_create_args(head=branch, base=settings.pr_base,
                                             title=title, body=body))
     return r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""

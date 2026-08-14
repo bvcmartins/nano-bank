@@ -3,6 +3,13 @@
 **Status:** design approved 2026-08-12. Successor to Phase A (analyst) and Phase B
 (infra levers: `execute_rollout_restart` / `execute_rollback`).
 
+**Update 2026-08-13 (local sandbox mode):** the artifact is now configurable via
+`SANDBOX_MODE`. The **default is `local`** — the sandbox is a bare git repo on a
+PVC (seeded by an initContainer), and a delegated change is published as a **review
+branch a human merges**, with no GitHub, no `gh`, and no token/egress. `github`
+mode (a real `gh pr create` PR) is opt-in. Everything else below is unchanged;
+"open a PR" reads as "publish a gated review branch" in local mode.
+
 ## Goal
 
 Give the CTO a way to **delegate a coding task to a coding agent** and have that

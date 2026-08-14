@@ -10,8 +10,9 @@ class Settings:
     ollama_base_url: str
     models: dict          # {"reasoning": <id>, "fast": <id>}
     model_fallback: str
-    sandbox_repo: str      # "owner/name"
-    sandbox_clone_url: str  # https clone URL (token injected at runtime)
+    sandbox_mode: str      # "local" (push a branch to a local bare repo) | "github" (gh pr create)
+    sandbox_repo: str      # local: a label/path; github: "owner/name"
+    sandbox_clone_url: str  # local: file:///sandbox ; github: https clone URL (token injected)
     workspace_root: str
     api_port: int
     request_timeout: float
@@ -27,7 +28,11 @@ class Settings:
             return e.get(k, d)
 
         default_model = g("CODER_MODEL", "kimi-k2.6")
-        repo = g("SANDBOX_REPO", "bvcmartins/cto-sandbox")
+        mode = g("SANDBOX_MODE", "local")
+        # local: the sandbox is a bare git repo mounted at /sandbox; github: owner/name.
+        repo = g("SANDBOX_REPO", "cto-sandbox" if mode == "local" else "bvcmartins/cto-sandbox")
+        default_clone = ("file:///sandbox" if mode == "local"
+                         else f"https://github.com/{repo}.git")
         gh_token = g("GH_TOKEN") or _read_file(g("GH_TOKEN_PATH", ""))
         return cls(
             ollama_api_key=g("OLLAMA_API_KEY"),
@@ -37,8 +42,9 @@ class Settings:
                 "fast": g("CODER_FAST_MODEL", default_model),
             },
             model_fallback=g("CODER_MODEL_FALLBACK", default_model),
+            sandbox_mode=mode,
             sandbox_repo=repo,
-            sandbox_clone_url=g("SANDBOX_CLONE_URL", f"https://github.com/{repo}.git"),
+            sandbox_clone_url=g("SANDBOX_CLONE_URL", default_clone),
             workspace_root=g("CODER_WORKSPACE_ROOT", "/tmp/coder-workspaces"),
             api_port=int(g("API_PORT", "8096")),
             request_timeout=float(g("REQUEST_TIMEOUT", "600")),

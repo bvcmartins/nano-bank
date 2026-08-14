@@ -58,3 +58,11 @@ def test_beat_outcome_delegate_failed():
 def test_beat_outcome_delegate_refused():
     ev = _delegate_ev({"outcome": "refused", "reason": "no signal"})
     assert beat_outcome(ev)["kind"] == "refused"
+
+
+def test_beat_outcome_delegated_local_branch_ref():
+    ev = _delegate_ev({"outcome": "executed",
+                       "pr_url": "cto/fix-rounding-T @ file:///sandbox"})
+    got = beat_outcome(ev)
+    assert got["kind"] == "delegated"
+    assert "cto/fix-rounding-T" in got["detail"]
