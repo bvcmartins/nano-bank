@@ -400,6 +400,18 @@ def lint_python(code: str) -> dict:
     return {"passed": len(errors) == 0, "errors": errors}
 
 
+# Secrets the model's own executed code must NOT see. The coder PROCESS keeps the
+# ollama key (to call the LLM), but every subprocess that runs MODEL-AUTHORED code
+# (bash / run_python / pytest) gets a SCRUBBED environment, so a malicious test or
+# snippet cannot read and exfiltrate credentials from the pod env.
+_SECRET_ENV_RE = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)", re.I)
+
+
+def sandbox_env() -> dict:
+    """os.environ minus anything that looks like a credential."""
+    return {k: v for k, v in os.environ.items() if not _SECRET_ENV_RE.search(k)}
+
+
 def _run_tests(test_code: str, timeout: int = TEST_TIMEOUT_S) -> dict:
     """Write a test module and run it (pytest if available, else plain python)."""
     f = WORKSPACE / "_spec_test.py"
@@ -407,7 +419,8 @@ def _run_tests(test_code: str, timeout: int = TEST_TIMEOUT_S) -> dict:
     cmd = ([sys.executable, "-m", "pytest", "-q", str(f)] if _HAS_PYTEST
            else [sys.executable, str(f)])
     try:
-        p = subprocess.run(cmd, cwd=str(WORKSPACE), capture_output=True, text=True, timeout=timeout)
+        p = subprocess.run(cmd, cwd=str(WORKSPACE), capture_output=True, text=True,
+                           timeout=timeout, env=sandbox_env())
     except subprocess.TimeoutExpired:
         return {"all_passed": False, "passed": 0, "failed": 0,
                 "stdout": f"timeout after {timeout}s", "exit_code": -1}
@@ -474,7 +487,8 @@ def bash(command: str) -> str:
             return f"Error: blocked by safety policy (matched {bad!r})"
     try:
         p = subprocess.run(command, shell=True, cwd=str(WORKSPACE),
-                           capture_output=True, text=True, timeout=BASH_TIMEOUT_S)
+                           capture_output=True, text=True, timeout=BASH_TIMEOUT_S,
+                           env=sandbox_env())
         return _truncate((p.stdout + p.stderr).strip() or "(no output)")
     except subprocess.TimeoutExpired:
         return f"Error: timeout after {BASH_TIMEOUT_S}s"
@@ -495,7 +509,8 @@ def run_python(code: str) -> str:
     f.write_text("import sys\nsys.path.insert(0, %r)\n" % str(AGENT_CODE_DIR) + code, encoding="utf-8")
     try:
         p = subprocess.run([sys.executable, str(f)], cwd=str(WORKSPACE),
-                           capture_output=True, text=True, timeout=BASH_TIMEOUT_S)
+                           capture_output=True, text=True, timeout=BASH_TIMEOUT_S,
+                           env=sandbox_env())
         return _truncate(f"exit={p.returncode}\n" + (p.stdout + p.stderr).strip(), 8000)
     except subprocess.TimeoutExpired:
         return f"timeout after {BASH_TIMEOUT_S}s"

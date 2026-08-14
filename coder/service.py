@@ -55,8 +55,11 @@ def _clone(settings: Settings, dest: str) -> str:
 
 
 def _run_repo_tests(checkout: str, settings: Settings) -> dict:
+    # The repo suite runs MODEL-MODIFIED code — scrub credentials from its env so a
+    # malicious test can't read the pod's secrets (see coding_agent.sandbox_env).
     p = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=checkout,
-                       capture_output=True, text=True, timeout=settings.test_timeout)
+                       capture_output=True, text=True, timeout=settings.test_timeout,
+                       env=ca.sandbox_env())
     out = (p.stdout + p.stderr)
     mp, mf = re.search(r"(\d+) passed", out), re.search(r"(\d+) failed", out)
     return {"all_passed": p.returncode == 0,

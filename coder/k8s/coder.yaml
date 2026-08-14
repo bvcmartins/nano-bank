@@ -22,26 +22,47 @@ spec:
   template:
     metadata: { labels: { app: coder } }
     spec:
+      # The coder runs MODEL-AUTHORED code; contain the blast radius.
+      automountServiceAccountToken: false      # no k8s API token in the pod
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
       containers:
       - name: coder
         image: nano-coder:dev
         imagePullPolicy: Never
         ports: [ { containerPort: 8096 } ]
-        envFrom:
-        - secretRef: { name: nano-agent-secrets }   # provides OLLAMA_API_KEY (reused from the CTO)
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true         # only the writable /tmp emptyDir below is writable
+          capabilities: { drop: [ "ALL" ] }
         env:
+        # Least privilege: ONLY the ollama key (not the whole nano-agent-secrets;
+        # SERVICE_CLIENT_SECRET is deliberately not present in this pod).
+        - name: OLLAMA_API_KEY
+          valueFrom: { secretKeyRef: { name: nano-agent-secrets, key: OLLAMA_API_KEY } }
         - { name: OLLAMA_BASE_URL,      value: https://ollama.com/v1 }
         - { name: CODER_MODEL,          value: kimi-k2.6 }
         - { name: CODER_MODEL_FALLBACK, value: kimi-k2.6 }
         - { name: SANDBOX_MODE,         value: local }
         - { name: SANDBOX_REPO,         value: cto-sandbox }
         - { name: SANDBOX_CLONE_URL,    value: "git://SANDBOX_HOST:9418/cto-sandbox.git" }  # deploy.sh overrides SANDBOX_HOST
-        - { name: CODER_WORKSPACE_ROOT, value: /tmp/coder-workspaces }
+        - { name: HOME,                 value: /tmp }
+        - { name: CODER_WORKSPACE,      value: /tmp/coder-home }       # import-time default workspace
+        - { name: CODER_WORKSPACE_ROOT, value: /tmp/coder-workspaces }  # per-task clones
         - { name: API_PORT,             value: "8096" }
+        volumeMounts:
+        - { name: work, mountPath: /tmp }        # the only writable path (rootfs is read-only)
         livenessProbe:
           httpGet: { path: /livez, port: 8096 }
           initialDelaySeconds: 5
           periodSeconds: 10
+      volumes:
+      - name: work
+        emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
