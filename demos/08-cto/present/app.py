@@ -32,6 +32,16 @@ RECORDINGS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recording
 
 st.set_page_config(page_title="Agent CTO", layout="wide")
 
+# Wrap long lines in code blocks (the coder's tool input/output + the diff on the
+# delegation beats) so the reader never has to scroll horizontally.
+st.markdown(
+    "<style>"
+    "div[data-testid='stCode'] pre, .stCode pre, pre code {"
+    " white-space: pre-wrap !important; overflow-wrap: anywhere !important;"
+    " word-break: break-word !important; }"
+    "</style>",
+    unsafe_allow_html=True)
+
 # Which beats this demo shows (a lean set for a tight screencast). Override with
 # CTO_SHOW_BEATS="1,7,8,9"; nothing is deleted — hidden beats stay in the driver
 # and recordings, they're just not surfaced here or driven on a live run.
