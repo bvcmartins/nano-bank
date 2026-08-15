@@ -295,6 +295,51 @@ class RichTracer(BaseCallbackHandler):
         return s
 
 
+class TranscriptCollector(BaseCallbackHandler):
+    """Records the coder's agentic session as an ordered, serialisable transcript —
+    each model turn's reasoning and each tool call (name + input + result) — so the
+    presentation console can replay 'the coder in action' step by step. Purely an
+    observer; never affects the run. Inputs/outputs are clipped (write_file bodies
+    and test logs get large)."""
+
+    def __init__(self, clip: int = 1400, max_steps: int = 400):
+        self._lock = threading.Lock()
+        self.steps: list[dict] = []
+        self._open: Dict[Any, int] = {}      # run_id -> index of its open tool step
+        self.clip = clip
+        self.max_steps = max_steps
+
+    def _push(self, step: dict) -> None:
+        with self._lock:
+            if len(self.steps) < self.max_steps:
+                self.steps.append(step)
+
+    def on_llm_end(self, response, *, run_id=None, **kw):
+        try:
+            gen = response.generations[0][0]
+            msg = getattr(gen, "message", None)
+            text = content_text(msg) if msg else getattr(gen, "text", "")
+        except Exception:  # noqa: BLE001
+            text = ""
+        text = (text or "").strip()
+        if text:
+            self._push({"type": "reasoning", "text": _clip(text, self.clip)})
+
+    def on_tool_start(self, serialized, input_str, *, run_id=None, **kw):
+        name = (serialized or {}).get("name") or "tool"
+        with self._lock:
+            if len(self.steps) < self.max_steps:
+                self.steps.append({"type": "tool", "name": name,
+                                   "input": _clip(input_str, self.clip), "output": ""})
+                self._open[run_id] = len(self.steps) - 1
+
+    def on_tool_end(self, output, *, run_id=None, **kw):
+        idx = self._open.pop(run_id, None)
+        if idx is not None:
+            with self._lock:
+                self.steps[idx]["output"] = _clip(output, self.clip)
+
+
 tracer = RichTracer()
 CB = {"callbacks": [tracer]}
 

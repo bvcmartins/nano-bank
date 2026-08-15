@@ -23,7 +23,7 @@ def _seams(checkout, publish_calls, *, agent_fixes: bool):
     def clone(settings, dest):
         return str(checkout)
 
-    def run_agent(task, feedback, co, settings):
+    def run_agent(task, feedback, co, settings, collector=None):
         if agent_fixes:  # stand in for the model editing the repo file
             (Path(co) / "helper.py").write_text("def dbl(n):\n    return n + n\n")
 
@@ -96,6 +96,31 @@ def test_git_publish_local_pushes_branch_no_github(tmp_path):
     assert "cto/fix-T" in branches                   # the branch really landed in the bare repo
 
 
+def test_run_is_stored_with_transcript_and_diff(tmp_path):
+    """An executed task records a run (keyed by branch) the console can fetch: it
+    carries the transcript steps + the diff + task/kind."""
+    checkout = _init_repo(tmp_path / "repo")
+    s = Settings.from_env({})
+    res = svc.run_code_task("delivery", "make dbl double", settings=s,
+                            seams=_seams(checkout, [], agent_fixes=True))
+    run = svc.get_run(res["branch"])
+    assert run is not None
+    assert run["kind"] == "delivery" and run["branch"] == res["branch"]
+    assert "steps" in run and isinstance(run["steps"], list)
+    assert "diff" in run and isinstance(run["diff"], str)
+    assert res["branch"] in svc.list_runs()
+
+
+def test_transcript_collector_records_reasoning_and_tools():
+    tc = svc.ca.TranscriptCollector()
+    tc.on_tool_start({"name": "write_file"}, "rounding.py: ...", run_id="r1")
+    tc.on_tool_end("wrote 42 bytes", run_id="r1")
+    kinds = [s["type"] for s in tc.steps]
+    assert kinds == ["tool"]
+    assert tc.steps[0]["name"] == "write_file"
+    assert tc.steps[0]["output"].startswith("wrote 42")
+
+
 def test_green_baseline_still_runs_model_and_publishes(tmp_path):
     """The delivery-task bug: baseline is GREEN (skipped/xfail contract), so the
     model must still run and its change must be published."""
@@ -114,7 +139,7 @@ def test_green_baseline_still_runs_model_and_publishes(tmp_path):
     def clone(settings, dest):
         return str(root)
 
-    def run_agent(task, feedback, co, settings):
+    def run_agent(task, feedback, co, settings, collector=None):
         ran["n"] += 1                              # model adds a new helper (green stays green)
         (Path(co) / "helper.py").write_text(
             "def dbl(n):\n    return n + n\n\n\ndef fee():\n    return 150\n")

@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from .config import Settings
 from .git_ops import code_task_result
+from . import service as svc
 from .service import run_code_task as default_run
 
 log = logging.getLogger("coder.api")
@@ -45,6 +46,20 @@ def create_app(settings: Settings, run_fn: Optional[Callable] = None,
             except Exception:  # noqa: BLE001
                 checks[name] = False
         return {"status": "ok", "service": "coder", "checks": checks}
+
+    @app.get("/runs")
+    def runs():
+        # The review branches of recent runs whose transcript the console can fetch.
+        return {"branches": svc.list_runs()}
+
+    @app.get("/runs/latest")
+    def run_latest():
+        return svc.latest_run() or {}
+
+    @app.get("/runs/{branch:path}")
+    def run_by_branch(branch: str):
+        # {branch:path} so a slashful review branch (cto/…-<ts>) matches as one arg.
+        return svc.get_run(branch) or {}
 
     @app.post("/code-task")
     def code_task(req: CodeTaskRequest):

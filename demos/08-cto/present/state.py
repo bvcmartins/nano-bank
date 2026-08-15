@@ -80,3 +80,52 @@ _STYLES = {
 
 def outcome_style(kind: str) -> tuple[str, str]:
     return _STYLES.get(kind, (kind.upper(), "#57606a"))
+
+
+_TOOL_ICON = {"read_file": "📖", "write_file": "📝", "write_code": "📝",
+              "bash": "🖥️", "run_python": "🖥️", "run_tests": "🧪"}
+
+
+def _tool_label(name: str, inp: str) -> str:
+    """A compact 'write_file(rounding.py)'-style label from a tool call + its input."""
+    arg = (inp or "").strip().splitlines()[0] if (inp or "").strip() else ""
+    arg = arg[:60]
+    return f"{name}({arg})" if arg else name
+
+
+def coder_timeline(coder_run: dict) -> list[dict]:
+    """Normalise a stored coder run into an ordered list of display steps, framed as
+    the CTO⇄Coder exchange: the delegation, the coder's reasoning/tool steps (the
+    'coder in action'), then the diff and the gated-PR result. Each step is
+    {icon, label, body, kind}. Pure — the app just renders it, one at a time."""
+    if not coder_run:
+        return []
+    steps: list[dict] = []
+    kind = coder_run.get("kind", "")
+    task = coder_run.get("task", "")
+    steps.append({"icon": "📋", "kind": "delegate",
+                  "label": f"CTO → Coder  (delegate · {kind})",
+                  "body": task})
+    for s in coder_run.get("steps", []):
+        if s.get("type") == "reasoning":
+            steps.append({"icon": "🧠", "kind": "reasoning",
+                          "label": "coder reasoning", "body": s.get("text", "")})
+        elif s.get("type") == "tool":
+            name = s.get("name", "tool")
+            body = (s.get("input", "") or "")
+            out = (s.get("output", "") or "")
+            if out:
+                body = f"{body}\n\n→ {out}" if body else f"→ {out}"
+            steps.append({"icon": _TOOL_ICON.get(name, "🔧"), "kind": "tool",
+                          "label": _tool_label(name, s.get("input", "")), "body": body})
+    diff = coder_run.get("diff", "")
+    if diff.strip():
+        steps.append({"icon": "📄", "kind": "diff",
+                      "label": "diff on the review branch", "body": diff})
+    tests = coder_run.get("tests", "")
+    branch = coder_run.get("branch", "")
+    steps.append({"icon": "✅", "kind": "result",
+                  "label": "Coder → CTO  (result)",
+                  "body": f"tests: {tests}   ·   branch: {branch}\n"
+                          "gated PR — a human reviews and merges (never auto-merged)."})
+    return steps

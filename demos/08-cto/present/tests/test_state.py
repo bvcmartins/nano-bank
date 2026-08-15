@@ -1,7 +1,26 @@
 import os, sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from state import (read_jsonl, save_recording, load_recording,  # noqa: E402
-                   latest_recording, outcome_style)
+                   latest_recording, outcome_style, coder_timeline, beat_catalog)
+
+
+def test_coder_timeline_frames_delegation_steps_and_result():
+    run = {"kind": "remediation", "task": "fix split_amount", "branch": "cto/fix-1",
+           "tests": "1p/0f", "diff": "--- a\n+++ b\n",
+           "steps": [{"type": "reasoning", "text": "I'll distribute the remainder"},
+                     {"type": "tool", "name": "write_file",
+                      "input": "rounding.py: ...", "output": "wrote"},
+                     {"type": "tool", "name": "run_tests", "input": "", "output": "1 passed"}]}
+    tl = coder_timeline(run)
+    assert tl[0]["kind"] == "delegate" and "fix split_amount" in tl[0]["body"]
+    kinds = [s["kind"] for s in tl]
+    assert kinds == ["delegate", "reasoning", "tool", "tool", "diff", "result"]
+    assert tl[2]["label"].startswith("write_file(")
+    assert "1p/0f" in tl[-1]["body"] and "cto/fix-1" in tl[-1]["body"]
+
+
+def test_coder_timeline_empty_run_is_empty():
+    assert coder_timeline({}) == []
 
 
 def test_read_jsonl_skips_partial_trailing_line():

@@ -21,6 +21,7 @@ import tempfile
 import streamlit as st
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import coder_client  # noqa: E402
 import ledger  # noqa: E402
 import state  # noqa: E402
 
@@ -46,6 +47,33 @@ ss.setdefault("proc", None)         # live run subprocess
 ss.setdefault("jsonl_path", None)   # live run JSONL file
 ss.setdefault("snapshot", None)     # ledger snapshot when replaying
 ss.setdefault("selected", SHOW_BEATS[0] if SHOW_BEATS else 1)  # centre pane beat (None = all)
+ss.setdefault("steps_shown", {})    # per-beat: how many coder-timeline steps are revealed
+ss.setdefault("primed", False)      # auto-load the newest recording only once per session
+
+
+def _beat_branch(rec: dict) -> str:
+    """The review branch a delegation beat produced (outcome.detail is '<branch> @ …')."""
+    detail = (rec.get("outcome") or {}).get("detail", "") or ""
+    return detail.split(" @ ")[0].strip() if detail else ""
+
+
+def _attach_coder_runs(beats: list[dict]) -> None:
+    """For each delegation beat, fetch the coder's transcript by branch and attach it
+    as rec['coder_run'] so the step-through player (and replay) can show it."""
+    for rec in beats:
+        if (rec.get("outcome") or {}).get("kind") == "delegated" and not rec.get("coder_run"):
+            branch = _beat_branch(rec)
+            if branch:
+                run = coder_client.fetch_run(branch)
+                if run:
+                    rec["coder_run"] = run
+
+
+def _reset() -> None:
+    ss.beats, ss.mode, ss.proc, ss.jsonl_path, ss.snapshot = [], "idle", None, None, None
+    ss.selected = SHOW_BEATS[0] if SHOW_BEATS else 1
+    ss.steps_shown = {}
+    ss.primed = True                # don't auto-reload a recording after an explicit reset
 
 
 def _beat_card(rec: dict) -> None:
@@ -72,6 +100,45 @@ def _beat_card(rec: dict) -> None:
         f"<span style='background:{color};color:white;padding:2px 10px;"
         f"border-radius:10px;font-weight:700'>{label}{detail}</span>",
         unsafe_allow_html=True)
+
+
+def _render_step(s: dict) -> None:
+    st.markdown(f"**{s['icon']} {s['label']}**")
+    body = s.get("body", "")
+    if s["kind"] == "diff":
+        st.code(body, language="diff")
+    elif s["kind"] == "tool":
+        st.code(body)
+    elif s["kind"] == "reasoning":
+        st.markdown("\n".join(f"> {ln}" for ln in body.splitlines()) or "> …")
+    else:                                  # delegate / result
+        st.markdown(body)
+
+
+def _coder_player(rec: dict) -> None:
+    """The CTO⇄Coder step-through: reveal one coder action at a time, Claude-Code
+    style. Reveal count lives in ss.steps_shown[beat]; buttons nudge it, Streamlit
+    reruns, and we render timeline[:shown] below."""
+    timeline = state.coder_timeline(rec.get("coder_run") or {})
+    if not timeline:
+        st.info("No coder transcript captured for this beat "
+                "(re-capture a live run to record it).")
+        return
+    n, total = int(rec["beat"]), len(timeline)
+    st.markdown("##### 🤝 CTO ⇄ Coder — the coder in action")
+    b1, b2, b3, b4, info = st.columns([1, 1, 1, 1, 3])
+    if b1.button("◀ Prev", key=f"pv-{n}"):
+        ss.steps_shown[n] = max(1, ss.steps_shown.get(n, 1) - 1)
+    if b2.button("▶ Next", key=f"nx-{n}", type="primary"):
+        ss.steps_shown[n] = min(total, ss.steps_shown.get(n, 1) + 1)
+    if b3.button("⏭ All", key=f"al-{n}"):
+        ss.steps_shown[n] = total
+    if b4.button("↺ Steps", key=f"rs-{n}"):
+        ss.steps_shown[n] = 1
+    shown = max(1, min(ss.steps_shown.get(n, 1), total))
+    info.caption(f"step {shown}/{total}")
+    for s in timeline[:shown]:
+        _render_step(s)
 
 
 def _pending_card(cat: dict) -> None:
@@ -110,18 +177,20 @@ def _start_replay() -> None:
 
 
 # On first load (nothing driven yet) prime the stepper from the newest recording
-# so the beat buttons show results immediately; the ledger still reads live.
-if not ss.beats and ss.mode == "idle":
+# so the beat buttons show results immediately; the ledger still reads live. Runs
+# once per session (ss.primed) so an explicit Reset can leave the console empty.
+if not ss.primed and not ss.beats and ss.mode == "idle":
     _latest = state.latest_recording(RECORDINGS)
     if _latest:
         try:
             ss.beats = state.load_recording(_latest)["beats"]
         except (OSError, ValueError):
             pass
+    ss.primed = True
 
 # --- control bar -----------------------------------------------------------
 st.title("Agent CTO — analyst + audited self-healing")
-c1, c2, c3, c4, _ = st.columns([1, 1.4, 1, 1, 3])
+c1, c2, c3, c4, c5, _ = st.columns([1, 1.4, 1, 1, 1, 2])
 if c1.button("▶ Run live", type="primary", disabled=ss.mode == "live"):
     _start_live()
 if c2.button("⏮ Replay last good run", disabled=ss.mode == "live"):
@@ -129,6 +198,8 @@ if c2.button("⏮ Replay last good run", disabled=ss.mode == "live"):
 tamper = c3.button("🔒 Tamper demo")
 if c4.button("▦ All beats"):
     ss.selected = None
+if c5.button("↺ Reset", disabled=ss.mode == "live"):
+    _reset()
 
 by_num = {int(r["beat"]): r for r in ss.beats}
 
@@ -171,6 +242,9 @@ with centre:
         cat = next((b for b in CATALOG if b["beat"] == ss.selected), None)
         if rec:
             _beat_card(rec)
+            if (rec.get("outcome") or {}).get("kind") == "delegated":
+                st.divider()
+                _coder_player(rec)
         elif ss.mode == "live":
             _pending_card(cat or {"beat": ss.selected, "title": "", "shows": "", "question": ""})
             st.caption("⏳ live run in progress — this beat will fill in when it lands.")
@@ -178,7 +252,8 @@ with centre:
             _pending_card(cat)
 
     if ss.mode == "live" and ss.proc and ss.proc.poll() is not None:
-        # live run finished: snapshot the ledger + save the recording
+        # live run finished: attach the coder transcripts, snapshot the ledger, save.
+        _attach_coder_runs(ss.beats)
         rows = ledger.read_rows()
         state.save_recording(RECORDINGS, ss.beats, rows, ledger.chain_verdict())
         ss.mode, ss.proc = "idle", None

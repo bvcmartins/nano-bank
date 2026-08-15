@@ -27,8 +27,22 @@ Open http://localhost:8512 (or the LAN URL streamlit prints).
   canonical recording is committed so this works on a fresh checkout.
 - **🔒 Tamper demo** — proves the ledger rejects UPDATE/DELETE.
 - **▦ All beats** — the classic stacked view of the whole (shown) run.
+- **↺ Reset** — clear the loaded run back to the initial (empty) state.
 - **Beat buttons** — click any beat to show just that beat; ✅ marks beats that have
   a result this session.
+
+## The coder in action (delegation beats)
+
+On the two delegation beats (remediation + delivery) the centre pane adds a
+**CTO ⇄ Coder** step-through: the delegation (task), then the coder's agentic
+session revealed one action at a time (◀ Prev / ▶ Next / ⏭ All) — its reasoning
+and each `read_file` / `write_file` / `bash` / `run_tests` call — then the final
+diff on the review branch and the gated-PR result. This is Claude-Code-style
+replay of how the coder actually solved the task.
+
+The transcript is captured by the coder service (`GET /runs/{branch}`) and attached
+to the recording at capture time (`present/coder_client.py`), so **replay** shows it
+with no live coder needed. Re-capture a run to refresh the transcripts.
 
 ## Which beats are shown
 

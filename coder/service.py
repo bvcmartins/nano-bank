@@ -4,6 +4,7 @@ edits repo files and re-verifies against the repo's OWN pytest -> self-verify
 gate (green -> branch+commit+push+gh pr create; red -> failed, no PR). All IO is
 behind `Seams` so it tests offline with a fake model + a temp git repo."""
 from __future__ import annotations
+import collections
 import logging
 import os
 import re
@@ -26,6 +27,32 @@ from . import git_ops
 log = logging.getLogger("coder.service")
 
 _MAX_ROUNDS = int(os.environ.get("CODER_MAX_ROUNDS", "3"))
+
+# In-process store of recent runs' transcripts, keyed by review branch, so the
+# presentation console can replay 'the coder in action' (fetched via GET /runs).
+_RUN_STORE: "collections.OrderedDict[str, dict]" = collections.OrderedDict()
+_RUN_STORE_MAX = 20
+
+
+def _store_run(rec: dict) -> None:
+    branch = rec.get("branch")
+    if not branch:
+        return
+    _RUN_STORE[branch] = rec
+    while len(_RUN_STORE) > _RUN_STORE_MAX:
+        _RUN_STORE.popitem(last=False)
+
+
+def get_run(branch: str) -> Optional[dict]:
+    return _RUN_STORE.get(branch)
+
+
+def list_runs() -> list[str]:
+    return list(_RUN_STORE.keys())
+
+
+def latest_run() -> Optional[dict]:
+    return next(reversed(_RUN_STORE.values())) if _RUN_STORE else None
 
 
 @dataclass
@@ -69,9 +96,11 @@ def _run_repo_tests(checkout: str, settings: Settings) -> dict:
             "stdout": out[-4000:]}
 
 
-def _run_agent(task: str, feedback: str, checkout: str, settings: Settings) -> None:
+def _run_agent(task: str, feedback: str, checkout: str, settings: Settings,
+               collector=None) -> None:
     """One agentic pass: let the coder read the failing tests and edit repo files
     in place using its tools. Uses the ported build_agent_graph over TOOLS_BASE.
+    If `collector` is given (a TranscriptCollector) it records the session steps.
 
     A single pass that doesn't converge within the recursion budget must NOT crash
     the request: LangGraph raises GraphRecursionError when the ReAct loop runs long.
@@ -89,12 +118,29 @@ def _run_agent(task: str, feedback: str, checkout: str, settings: Settings) -> N
         "Work efficiently: make the edit, run the tests once to confirm green, then "
         "STOP — do not keep exploring after the suite passes.\n\n"
         f"CURRENT TEST OUTPUT (verbatim ground truth):\n{feedback[:2000]}")
+    cfg = ca.run_config("code-task", recursion_limit=6 * ca.MAX_ITERATIONS)
+    if collector is not None:
+        cfg["callbacks"] = list(cfg.get("callbacks", [])) + [collector]
     try:
-        graph.invoke({"messages": [HumanMessage(prompt)]},
-                     config=ca.run_config("code-task", recursion_limit=6 * ca.MAX_ITERATIONS))
+        graph.invoke({"messages": [HumanMessage(prompt)]}, config=cfg)
     except GraphRecursionError:
         log.warning("agentic pass hit the recursion limit without a stop condition; "
                     "leaving edits on disk for the test-gate to judge")
+
+
+def _diff(checkout: str) -> str:
+    """The coder's change as a unified diff, for the console. Call AFTER the branch
+    is committed: origin/main..HEAD is the delegated change (baseline → branch tip).
+    Falls back to the working-tree diff vs HEAD (a not-yet-committed change), never
+    to `git show HEAD`, which would dump the whole baseline commit."""
+    p = subprocess.run(["git", "diff", "origin/main..HEAD", "--", "."], cwd=checkout,
+                       capture_output=True, text=True)
+    out = p.stdout or ""
+    if not out.strip():
+        p = subprocess.run(["git", "diff", "HEAD", "--", "."], cwd=checkout,
+                           capture_output=True, text=True)
+        out = p.stdout or ""
+    return out[:20000]
 
 
 def _git_publish(checkout: str, branch: str, title: str, body: str,
@@ -136,6 +182,7 @@ def run_code_task(kind: str, task: str, *, settings: Settings,
                   seams: Optional[Seams] = None) -> dict:
     seams = seams or default_seams()
     ts = seams.now()
+    collector = ca.TranscriptCollector()
     work = tempfile.mkdtemp(prefix="coder-", dir=_ensure_root(settings))
     checkout = os.path.join(work, "repo")
     try:
@@ -148,7 +195,7 @@ def run_code_task(kind: str, task: str, *, settings: Settings,
         changed = False
         while rounds < _MAX_ROUNDS:
             rounds += 1
-            seams.run_agent(task, tests["stdout"], checkout, settings)
+            seams.run_agent(task, tests["stdout"], checkout, settings, collector)
             tests = seams.run_repo_tests(checkout, settings)
             changed = _has_changes(checkout)
             if tests["all_passed"] and changed:
@@ -168,9 +215,14 @@ def run_code_task(kind: str, task: str, *, settings: Settings,
                 "PR-gated — a human reviews and merges.")
         pr_url = seams.git_publish(checkout, branch, title=summary, body=body,
                                    settings=settings)
+        diff = _diff(checkout)                    # AFTER commit: origin/main..HEAD is the change
+        tests_str = f"{tests['passed']}p/{tests['failed']}f"
+        _store_run({"kind": kind, "task": task, "branch": branch, "outcome": "executed",
+                    "tests": tests_str, "summary": summary, "pr_url": pr_url or None,
+                    "steps": list(collector.steps), "diff": diff, "ts": ts})
         return git_ops.code_task_result(
             "executed", pr_url=pr_url or None, branch=branch,
-            tests=f"{tests['passed']}p/{tests['failed']}f", summary=summary)
+            tests=tests_str, summary=summary)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
