@@ -39,6 +39,13 @@ _env_beats = os.environ.get("CTO_SHOW_BEATS", "1,7,8,9")
 SHOW_BEATS = sorted(int(x) for x in _env_beats.split(",") if x.strip())
 FULL_CATALOG = state.beat_catalog(DRIVE_PY)     # all 9: title + what-it-tests + question
 CATALOG = [b for b in FULL_CATALOG if b["beat"] in SHOW_BEATS]
+# Renumber the SHOWN beats sequentially for display (1..N) so a lean 1,7,8,9 set
+# reads as Beat 1,2,3,4. Records are still keyed by the real driver beat number.
+DISPLAY_NUM = {orig: i + 1 for i, orig in enumerate(SHOW_BEATS)}
+
+
+def _disp(n: int) -> int:
+    return DISPLAY_NUM.get(int(n), int(n))
 
 ss = st.session_state
 ss.setdefault("beats", [])          # rendered beat records (live or replay)
@@ -78,7 +85,7 @@ def _reset() -> None:
 
 def _beat_card(rec: dict) -> None:
     label, color = state.outcome_style(rec["outcome"]["kind"])
-    st.markdown(f"#### Beat {rec['beat']} — {rec['title']}")
+    st.markdown(f"#### Beat {_disp(rec['beat'])} — {rec['title']}")
     st.caption(rec["shows"])
     st.markdown(f"**Q:** {rec['question']}")
     h = rec["harness"]
@@ -143,7 +150,7 @@ def _coder_player(rec: dict) -> None:
 
 def _pending_card(cat: dict) -> None:
     """A beat that hasn't been run/replayed yet: show its intent + question."""
-    st.markdown(f"#### Beat {cat['beat']} — {cat['title']}")
+    st.markdown(f"#### Beat {_disp(cat['beat'])} — {cat['title']}")
     st.caption(cat["shows"])
     st.markdown(f"**Q:** {cat['question']}")
     st.info("Not shown yet — click **▶ Run live** or **⏮ Replay last good run**, "
@@ -213,7 +220,7 @@ with nav:
         n = b["beat"]
         mark = "✅" if n in by_num else "⚪"
         sel = "▶ " if ss.selected == n else ""
-        if st.button(f"{sel}{mark} Beat {n} — {b['title']}",
+        if st.button(f"{sel}{mark} Beat {_disp(n)} — {b['title']}",
                      key=f"beat-btn-{n}", use_container_width=True):
             ss.selected = n
         st.caption(b["shows"])

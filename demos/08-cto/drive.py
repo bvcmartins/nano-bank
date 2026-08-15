@@ -27,7 +27,13 @@ BEATS = [
                    "image drift, with the numbers. Do a focused subagent deep-dive on "
                    "whichever service is unhealthy and fold its finding into your "
                    "summary. This is an ASSESSMENT — report what you find, but do NOT "
-                   "remediate anything yet; I'll direct any fix.",
+                   "remediate anything yet; I'll direct any fix. Write the COMPLETE "
+                   "review IN YOUR REPLY, spelling out every figure (totals, healthy vs "
+                   "degraded, restart counts, rollout status, the stalled service and "
+                   "its cause, image drift) and the subagent's finding — I read only "
+                   "your written reply, not your tool calls, so do NOT answer with a "
+                   "terse 'assessment complete' and do NOT refer to 'the tool outputs "
+                   "above'.",
         "thread": "new",
     },
     {
