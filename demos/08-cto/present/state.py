@@ -1,11 +1,36 @@
 """Pure state helpers for the presentation console: parse the JSONL beat stream,
-save/load recordings, and map an outcome kind to a chip style. No Streamlit here
+save/load recordings, map an outcome kind to a chip style, and read the static
+beat catalog (title + what-it-tests + question) from the driver. No Streamlit here
 so it stays unit-testable."""
 from __future__ import annotations
+import ast
 import glob
 import json
 import os
 from datetime import datetime, timezone
+
+
+def beat_catalog(drive_path: str) -> list[dict]:
+    """The demo's beats as a static catalog — {beat, title, shows, question} per
+    entry — parsed straight from drive.py's BEATS list via ast (no import, no
+    network), so the per-beat buttons + their 'what is being tested' captions
+    render before any run and stay in sync with the driver. Empty on any problem."""
+    try:
+        with open(drive_path, encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+    except (OSError, SyntaxError):
+        return []
+    node = next((n.value for n in tree.body if isinstance(n, ast.Assign)
+                 and any(isinstance(t, ast.Name) and t.id == "BEATS" for t in n.targets)),
+                None)
+    if node is None:
+        return []
+    try:
+        raw = ast.literal_eval(node)
+    except (ValueError, SyntaxError):
+        return []
+    return [{"beat": i, "title": b.get("title", ""), "shows": b.get("shows", ""),
+             "question": b.get("message", "")} for i, b in enumerate(raw, 1)]
 
 
 def read_jsonl(text: str) -> list[dict]:
