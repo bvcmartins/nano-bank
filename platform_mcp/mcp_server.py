@@ -204,12 +204,14 @@ def build_mcp(k8s, health, writer=None, audit=None, settings=None, coder=None) -
         @mcp.tool()
         def delegate_coding_task(kind: str, task: str) -> dict:
             """Delegate a scoped coding task to the engineering coder, which opens a
-            PR-gated pull request against the sandbox service repo. kind='remediation'
-            (a durable root-cause code fix — REFUSED unless a real failing/degraded
-            platform signal is observed) or kind='delivery' (a handed-down backlog
-            task). You do NOT write code yourself; you delegate it. A human reviews and
-            MERGES the PR — never you. Autonomous + audited; report the outcome and the
-            PR link verbatim."""
+            PR-gated pull request against the SANDBOX service repo (not the live
+            platform). kind='remediation' — REFUSED unless a real failing/degraded
+            platform signal is observed; the signal gates WHETHER you may delegate, but
+            the coder still works only in the sandbox, so treat it as a sandbox change
+            warranted by the incident, not a hot-fix to the failing system. Or
+            kind='delivery' — a handed-down backlog task, no signal required. You do NOT
+            write code yourself; you delegate it. A human reviews and MERGES the PR —
+            never you. Autonomous + audited; report the outcome and the PR link verbatim."""
             return _stringify(_do_delegate(k8s, coder, audit, settings, kind, task))
 
     return mcp

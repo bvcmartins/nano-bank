@@ -12,6 +12,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +29,25 @@ from . import git_ops
 log = logging.getLogger("coder.service")
 
 _MAX_ROUNDS = int(os.environ.get("CODER_MAX_ROUNDS", "3"))
+# Wall-clock ceiling for one delegation. The agentic loop can outlive the client's
+# HTTP timeout (CoderClient gives up at ~900s) and keep spending tokens with nobody
+# waiting; this bounds it, checked at each round boundary.
+_RUN_DEADLINE_S = float(os.environ.get("CODER_RUN_DEADLINE_S", "1200"))
+
+# run_code_task drives the coder through module-level globals (ca.set_workspace
+# rebinds WORKSPACE, which the tools read at call time), so two concurrent runs would
+# interleave into each other's checkout. FastAPI serves the sync POST /code-task on a
+# threadpool, so serialise runs here. (replicas:1 + Recreate bounds it to one pod but
+# does NOT serialise requests into it.)
+_RUN_LOCK = threading.Lock()
+
+# Scratch artefacts the coder's own tools drop into the checkout (run_tests ->
+# _spec_test.py, run_python -> _run.py, write_code -> agent_code/). They are the
+# agent's footprint, not the repo change: they must never be staged into the PR, and
+# on their own they must not satisfy the "coder produced a change" gate (a run that
+# only explores would otherwise publish a PR of pure detritus).
+_AGENT_SCRATCH = ("_spec_test.py", "_run.py", "agent_code/",
+                  "learned_policy.json", "_selftest_policy.json")
 
 # In-process store of recent runs' transcripts, keyed by review branch, so the
 # presentation console can replay 'the coder in action' (fetched via GET /runs).
@@ -35,12 +56,24 @@ _RUN_STORE_MAX = 20
 
 
 def _store_run(rec: dict) -> None:
-    branch = rec.get("branch")
-    if not branch:
+    # Key by branch for a published run, else by timestamp so FAILED runs (no branch)
+    # are still retained — those are often the ones most worth inspecting.
+    key = rec.get("branch") or rec.get("ts")
+    if not key:
         return
-    _RUN_STORE[branch] = rec
+    _RUN_STORE[key] = rec
     while len(_RUN_STORE) > _RUN_STORE_MAX:
         _RUN_STORE.popitem(last=False)
+
+
+def _store_failed(kind: str, task: str, ts: str, tests_str: str, summary: str,
+                  reason: str, collector, checkout: str) -> None:
+    """Retain a failed run's transcript (keyed by ts, no branch) so GET /runs can
+    inspect it — a red or no-change run is often the one most worth reading."""
+    _store_run({"kind": kind, "task": task, "branch": None, "ts": ts,
+                "outcome": "failed", "tests": tests_str, "summary": summary,
+                "reason": reason, "pr_url": None,
+                "steps": list(collector.steps), "diff": _diff(checkout)})
 
 
 def get_run(branch: str) -> Optional[dict]:
@@ -90,9 +123,18 @@ def _run_repo_tests(checkout: str, settings: Settings) -> dict:
                        env=ca.sandbox_env())
     out = (p.stdout + p.stderr)
     mp, mf = re.search(r"(\d+) passed", out), re.search(r"(\d+) failed", out)
+    me = re.search(r"(\d+) error", out)
+    errors = int(me.group(1)) if me else 0
+    failed = int(mf.group(1)) if mf else 0
+    # A collection/import error yields no "N failed"; don't let a broken suite read as
+    # 0f (which looks benign in the console). Reflect the error count, min 1 on any
+    # non-zero exit. The gate stays all_passed (returncode == 0), so this is display-only.
+    if p.returncode != 0 and failed == 0:
+        failed = errors or 1
     return {"all_passed": p.returncode == 0,
             "passed": int(mp.group(1)) if mp else 0,
-            "failed": int(mf.group(1)) if mf else (0 if p.returncode == 0 else 1),
+            "failed": failed,
+            "errors": errors,
             "stdout": out[-4000:]}
 
 
@@ -158,7 +200,12 @@ def _git_publish(checkout: str, branch: str, title: str, body: str,
                               capture_output=True, text=True, env=env)
 
     run(["git", "checkout", "-b", branch])
-    run(["git", "add", "-A"])        # stage new + modified + deleted (not just tracked)
+    # Stage new + modified + deleted, but EXCLUDE the agent's scratch footprint so the
+    # PR is the repo change, not _spec_test.py/_run.py/agent_code/. Robust even when the
+    # sandbox repo carries no .gitignore for them (github mode). Pathspec magic prefix
+    # ':(exclude)' drops each from an otherwise-everything add.
+    excludes = [f":(exclude){s.rstrip('/')}" for s in _AGENT_SCRATCH]
+    run(["git", "add", "-A", "--", ".", *excludes])
     run(["git", "-c", "user.email=coder@nano.bank", "-c", "user.name=nano-bank coder",
          "commit", "-m", title])
     run(["git", "push", "-u", "origin", branch])
@@ -180,11 +227,19 @@ def default_seams() -> Seams:
 
 def run_code_task(kind: str, task: str, *, settings: Settings,
                   seams: Optional[Seams] = None) -> dict:
+    # Serialise: one run at a time drives the module-global workspace (see _RUN_LOCK).
+    with _RUN_LOCK:
+        return _run_code_task_locked(kind, task, settings=settings, seams=seams)
+
+
+def _run_code_task_locked(kind: str, task: str, *, settings: Settings,
+                          seams: Optional[Seams] = None) -> dict:
     seams = seams or default_seams()
     ts = seams.now()
     collector = ca.TranscriptCollector()
     work = tempfile.mkdtemp(prefix="coder-", dir=_ensure_root(settings))
     checkout = os.path.join(work, "repo")
+    started = time.monotonic()
     try:
         checkout = seams.clone(settings, checkout) or checkout
         tests = seams.run_repo_tests(checkout, settings)          # baseline (model's context)
@@ -193,6 +248,7 @@ def run_code_task(kind: str, task: str, *, settings: Settings,
         # the baseline can be green; the model must still make (and verify) a change.
         rounds = 0
         changed = False
+        deadline_hit = False
         while rounds < _MAX_ROUNDS:
             rounds += 1
             seams.run_agent(task, tests["stdout"], checkout, settings, collector)
@@ -200,15 +256,25 @@ def run_code_task(kind: str, task: str, *, settings: Settings,
             changed = _has_changes(checkout)
             if tests["all_passed"] and changed:
                 break
+            if time.monotonic() - started > _RUN_DEADLINE_S:
+                deadline_hit = True
+                log.warning("run exceeded the %.0fs deadline after round %d; stopping",
+                            _RUN_DEADLINE_S, rounds)
+                break
         summary = f"{kind}: {task[:120]}"
+        tests_str = f"{tests['passed']}p/{tests['failed']}f"
         if not changed:
+            reason = ("run deadline exceeded before any change" if deadline_hit
+                      else "coder produced no change")
+            _store_failed(kind, task, ts, tests_str, summary, reason, collector, checkout)
             return git_ops.code_task_result(
-                "failed", tests=f"{tests['passed']}p/{tests['failed']}f",
-                summary=summary, reason="coder produced no change")
+                "failed", tests=tests_str, summary=summary, reason=reason)
         if not tests["all_passed"]:
+            reason = ("run deadline exceeded before tests passed" if deadline_hit
+                      else "repo tests still red after coder rounds")
+            _store_failed(kind, task, ts, tests_str, summary, reason, collector, checkout)
             return git_ops.code_task_result(
-                "failed", tests=f"{tests['passed']}p/{tests['failed']}f",
-                summary=summary, reason="repo tests still red after coder rounds")
+                "failed", tests=tests_str, summary=summary, reason=reason)
         branch = git_ops.branch_slug(task, ts)
         body = (f"Delegated by the Agent CTO (kind: {kind}).\n\nTask: {task}\n\n"
                 "Authored by the coder against the sandbox; repo tests are green. "
@@ -216,7 +282,6 @@ def run_code_task(kind: str, task: str, *, settings: Settings,
         pr_url = seams.git_publish(checkout, branch, title=summary, body=body,
                                    settings=settings)
         diff = _diff(checkout)                    # AFTER commit: origin/main..HEAD is the change
-        tests_str = f"{tests['passed']}p/{tests['failed']}f"
         _store_run({"kind": kind, "task": task, "branch": branch, "outcome": "executed",
                     "tests": tests_str, "summary": summary, "pr_url": pr_url or None,
                     "steps": list(collector.steps), "diff": diff, "ts": ts})
@@ -228,10 +293,19 @@ def run_code_task(kind: str, task: str, *, settings: Settings,
 
 
 def _has_changes(checkout: str) -> bool:
-    """True iff the coder left uncommitted changes in the checkout (git status)."""
+    """True iff the coder left a REAL repo change — the agent's own scratch files
+    (_AGENT_SCRATCH) don't count. Without this filter a run that only explored (it
+    called run_tests once, edited nothing) leaves _spec_test.py behind, which reads as
+    'the coder produced a change' and publishes a PR of pure detritus — exactly the
+    case the no-change -> failed gate exists to catch."""
     p = subprocess.run(["git", "status", "--porcelain"], cwd=checkout,
                        capture_output=True, text=True)
-    return bool(p.stdout.strip())
+    for line in p.stdout.splitlines():
+        # porcelain v1: 2 status chars + space, then the path (quoted if unusual).
+        path = line[3:].strip().strip('"')
+        if path and not path.startswith(_AGENT_SCRATCH):
+            return True
+    return False
 
 
 def _ensure_root(settings: Settings) -> str:

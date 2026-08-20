@@ -28,3 +28,12 @@ def test_run_python_tool_cannot_read_a_secret(tmp_path, monkeypatch):
         {"code": "import os; print('LEAK' if os.environ.get('OLLAMA_API_KEY') else 'clean')"})
     assert "sk-should-not-leak" not in out
     assert "clean" in out
+
+
+def test_policy_path_stays_outside_the_checkout(tmp_path):
+    # Finding 10: load_policy() reads this file straight into the system prompt, and the
+    # model's write_file is confined to WORKSPACE — so set_workspace must NOT point the
+    # policy file into the checkout, or the model could edit its own prompt.
+    ca.set_workspace(tmp_path)
+    assert ca.DEFAULT_POLICY_PATH != tmp_path / "learned_policy.json"
+    assert tmp_path.resolve() not in ca.DEFAULT_POLICY_PATH.parents

@@ -96,6 +96,69 @@ def test_git_publish_local_pushes_branch_no_github(tmp_path):
     assert "cto/fix-T" in branches                   # the branch really landed in the bare repo
 
 
+def test_scratch_files_alone_do_not_count_as_a_change(tmp_path):
+    """Finding 9: a run that only explored (dropped the coder's own scratch files,
+    edited nothing) must hit the no-change gate — not publish a PR of agent detritus."""
+    checkout = _init_repo(tmp_path / "repo")
+    calls = []
+
+    def clone(settings, dest):
+        return str(checkout)
+
+    def run_agent(task, feedback, co, settings, collector=None):
+        (Path(co) / "_spec_test.py").write_text("def test_noop():\n    assert True\n")
+        (Path(co) / "_run.py").write_text("print('scratch')\n")
+        (Path(co) / "agent_code").mkdir(exist_ok=True)
+        (Path(co) / "agent_code" / "draft.py").write_text("x = 1\n")
+
+    def run_repo_tests(co, settings):
+        return {"all_passed": True, "passed": 1, "failed": 0, "stdout": "1 passed"}
+
+    def git_publish(co, branch, title, body, settings):
+        calls.append(branch)
+        return "should-not-happen"
+
+    seams = svc.Seams(clone=clone, run_agent=run_agent, run_repo_tests=run_repo_tests,
+                      git_publish=git_publish, now=lambda: "T")
+    res = svc.run_code_task("delivery", "explore only", settings=Settings.from_env({}),
+                            seams=seams)
+    assert res["outcome"] == "failed"
+    assert "no change" in res["reason"]
+    assert calls == []
+
+
+def test_git_publish_excludes_agent_scratch(tmp_path):
+    """Finding 9: _git_publish stages the real change but NOT the agent's scratch
+    footprint, even when the repo carries no .gitignore for it."""
+    bare = tmp_path / "s.git"
+    subprocess.run(["git", "init", "--bare", "-q", "-b", "main", str(bare)], check=True)
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    (seed / "helper.py").write_text("x = 1\n")
+    for args in (["git", "init", "-q"], ["git", "add", "-A"],
+                 ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base"],
+                 ["git", "branch", "-M", "main"],
+                 ["git", "remote", "add", "origin", str(bare)],
+                 ["git", "push", "-q", "-u", "origin", "main"]):
+        subprocess.run(args, cwd=seed, check=True)
+    checkout = tmp_path / "co"
+    subprocess.run(["git", "clone", "-q", str(bare), str(checkout)], check=True)
+    (checkout / "helper.py").write_text("x = 2  # real edit\n")
+    (checkout / "_spec_test.py").write_text("assert True\n")          # scratch
+    (checkout / "_run.py").write_text("print(1)\n")                   # scratch
+    (checkout / "agent_code").mkdir()
+    (checkout / "agent_code" / "d.py").write_text("y = 1\n")         # scratch
+
+    s = Settings.from_env({"SANDBOX_MODE": "local", "SANDBOX_CLONE_URL": str(bare)})
+    svc._git_publish(str(checkout), "cto/x-T", "t", "b", s)
+    files = subprocess.run(["git", "ls-tree", "-r", "--name-only", "cto/x-T"],
+                           cwd=bare, capture_output=True, text=True).stdout
+    assert "helper.py" in files                       # the real change landed
+    assert "_spec_test.py" not in files               # scratch did not
+    assert "_run.py" not in files
+    assert "agent_code/d.py" not in files
+
+
 def test_run_is_stored_with_transcript_and_diff(tmp_path):
     """An executed task records a run (keyed by branch) the console can fetch: it
     carries the transcript steps + the diff + task/kind."""

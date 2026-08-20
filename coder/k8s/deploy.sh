@@ -22,9 +22,22 @@ kubectl --context "$CTX" apply -f coder/k8s/coder.yaml
 kubectl --context "$CTX" -n nano-bank rollout status deploy/coder --timeout=120s
 
 echo
+# Loudly flag missing containment. DOCKER-USER rules don't survive a Docker restart or
+# host reboot, so they can be absent while the pod looks healthy. Best-effort: reading
+# iptables needs root, so only check when passwordless sudo is available — never block
+# the (non-root) deploy on it.
+if sudo -n iptables -S DOCKER-USER >/dev/null 2>&1; then
+  if ! sudo -n coder/k8s/egress-firewall.sh --verify >/dev/null 2>&1; then
+    echo "⚠️  ⚠️  ⚠️  CONTAINMENT NOT ACTIVE: the coder's egress firewall rules are ABSENT."
+    echo "        The model-code pod can currently reach this host + the LAN. Install them:"
+    echo "            sudo coder/k8s/egress-firewall.sh"
+    echo
+  fi
+fi
 echo "🔒 CONTAINMENT: kindnet does not enforce NetworkPolicy. Deny the coder (and all"
 echo "   kind pods) from reaching this host + the LAN with the host firewall:"
 echo "     sudo coder/k8s/egress-firewall.sh"
+echo "   (verify anytime: sudo coder/k8s/egress-firewall.sh --verify)"
 echo "   Review/merge a delegated change (host-initiated):"
 echo "     kubectl -n nano-bank exec deploy/coder -- git -C /sandbox diff main..<branch>"
 echo "     kubectl -n nano-bank exec deploy/coder -- git -C /sandbox merge --ff-only <branch>"

@@ -38,7 +38,9 @@ is Phase C"* — is what this builds.
 - The CTO/coder never **merge**. A human reviews and merges the PR — that is the
   gate.
 - The coder never touches the nano-bank repo or anything in prod. It edits **only
-  the dedicated sandbox repo** (allow-list enforced at the lever).
+  the dedicated sandbox repo**, and this is **structural, not validated**: the lever
+  takes no repo argument, so there is no other target to choose. The coder service is
+  pinned to the sandbox by its own `SANDBOX_CLONE_URL`.
 - No autonomous multi-repo or free-form code changes. One sandbox, scoped tasks.
 
 ## Decisions (locked in brainstorming)
@@ -58,8 +60,8 @@ is Phase C"* — is what this builds.
 ```
 CTO agent (kimi)                      platform_mcp (:8094)                coder service (:8096)         cto-sandbox (GitHub)
   /ask ─► delegate_coding_task ─────►  @tool delegate_coding_task ──HTTP─► POST /code-task ─┐
-                                        (allow-list + precondition           clone sandbox   │
-                                         self-verify; writes ledger)          run coder loop  │
+                                        (structural sandbox pin +            clone sandbox   │
+                                         precondition; writes ledger)        run coder loop  │
                                                                               run tests ◄─────┘
                                                                               tests green?
                                                                                 ├─ yes ─► branch+commit+push+gh pr create ─► PR url
@@ -154,13 +156,19 @@ the Phase B levers):
 @mcp.tool()
 def delegate_coding_task(kind: str, task: str) -> dict:
     """Delegate a scoped coding task to the engineering coder, which opens a
-    PR-gated pull request against the sandbox repo. REFUSED unless the target is
-    on the coder allow-list (sandbox only) and, for kind='remediation', an actual
-    failing/degraded signal is observed. Autonomous + audited; a human merges the
-    PR. Report the PR link verbatim."""
+    PR-gated pull request against the sandbox repo. The sandbox is the ONLY target
+    (structural — the lever takes no repo argument). For kind='remediation', REFUSED
+    unless an actual failing/degraded platform signal is observed. Autonomous +
+    audited; a human merges the PR. Report the PR link verbatim."""
 ```
 
-- **Allow-list:** sandbox repo only. Any other target → refused.
+- **Structural sandbox pin:** the sandbox is the only repo the coder can touch —
+  the lever takes no repo argument, so there is nothing else to target. (Containment
+  by construction, not a validated allow-list. Note: `settings.allow_list` *is*
+  passed in the delegation path, but only as the set of **k8s deployments** to
+  health-check for remediation — it is not a repo guard. The repo guard the
+  restart/rollback levers use, `levers.is_allowed`, does not apply here because there
+  is no repo parameter to guard.)
 - **Precondition self-verify:** `kind="remediation"` requires an **observed
   platform failing signal** — the same k8s reads Phase B self-verifies against
   (a degraded/recently-stalled deployment). This ties remediation to the real
@@ -202,8 +210,8 @@ restore it already does.
 
 ### 6. Guardrails & testing
 
-Guardrails: **allow-list** (sandbox only) · **self-verify** (no red PRs) ·
-**human-merge gate** · every delegation **audited** in the tamper-evident ledger.
+Guardrails: **structural sandbox pin** (no repo argument to the lever) · **self-verify**
+(no red PRs) · **human-merge gate** · every delegation **audited** in the tamper-evident ledger.
 
 Testing:
 - The port carries its own **offline `_selftest()`** (lint gate, fence/think
@@ -214,8 +222,10 @@ Testing:
 - Coder service — a **fake model + a temp git repo** (no network): verifies the
   agentic loop edits repo files, the test-gate opens a PR only on green, and
   refuses-on-red with no PR. `gh` and `push` are seams stubbed in the test.
-- Lever — a **fake coder client**: self-verify refusal, allow-list refusal, and
-  the exact ledger record on each of executed/refused/failed.
+- Lever — a **fake coder client**: refusal on a bad `kind`/empty task and on a missing
+  remediation signal, and the exact ledger record on each of executed/refused/failed.
+  (No allow-list refusal test — there is no repo argument to reject; containment is
+  structural.)
 - One **live smoke**: a real run producing a real PR against `cto-sandbox`, then
   reseed.
 

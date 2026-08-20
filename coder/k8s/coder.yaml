@@ -4,8 +4,11 @@
 #   * FS: no host mount; the sandbox is a bare repo on a PVC at /sandbox, seeded by
 #     an initContainer from the image's coder/sandbox-seed/. The model can read/write
 #     ONLY the sandbox + a /tmp scratch dir. Your other repos/files aren't present.
-#   * Secrets: only OLLAMA_API_KEY is injected (not the whole nano-agent-secrets),
-#     and it is scrubbed from every subprocess that runs model code (see sandbox_env).
+#   * Secrets: only the OLLAMA_API_KEY is provided (not the whole nano-agent-secrets),
+#     and it is mounted as a FILE (not an env var) so it is absent from the process
+#     environment — a model-authored subprocess cannot read it back out of
+#     /proc/1/environ. sandbox_env() still scrubs any *_KEY/_TOKEN env for defence in
+#     depth; the file mount is what closes the /proc route the containment tests probe.
 #   * Pod: non-root, read-only rootfs (only /tmp writable), all caps dropped, no
 #     privilege escalation, seccomp RuntimeDefault, no k8s API token.
 #   * Network: the coder needs NO host access (sandbox is in-cluster). Deny the pod
@@ -102,9 +105,11 @@ spec:
           capabilities: { drop: [ "ALL" ] }
         env:
         # Least privilege: ONLY the ollama key (not the whole nano-agent-secrets;
-        # SERVICE_CLIENT_SECRET is deliberately not present in this pod).
-        - name: OLLAMA_API_KEY
-          valueFrom: { secretKeyRef: { name: nano-agent-secrets, key: OLLAMA_API_KEY } }
+        # SERVICE_CLIENT_SECRET is deliberately not present in this pod). The key is
+        # supplied as a MOUNTED FILE (see the ollama-key volume) and read once at
+        # startup — it never enters the process environment, so it can't be recovered
+        # from /proc/1/environ by model-authored code. Only the *path* is an env var.
+        - { name: OLLAMA_API_KEY_PATH,  value: /var/run/secrets/ollama/api-key }
         - { name: OLLAMA_BASE_URL,      value: https://ollama.com/v1 }
         - { name: CODER_MODEL,          value: kimi-k2.6 }
         - { name: CODER_MODEL_FALLBACK, value: kimi-k2.6 }
@@ -118,6 +123,7 @@ spec:
         volumeMounts:
         - { name: sandbox, mountPath: /sandbox }
         - { name: work,    mountPath: /tmp }
+        - { name: ollama-key, mountPath: /var/run/secrets/ollama, readOnly: true }
         livenessProbe:
           httpGet: { path: /livez, port: 8096 }
           initialDelaySeconds: 5
@@ -128,6 +134,15 @@ spec:
           claimName: coder-sandbox
       - name: work
         emptyDir: {}
+      # The ollama key as a file (mode 0400), projected under a single key so the
+      # mount holds nothing else. Read once at startup by config.from_env via
+      # OLLAMA_API_KEY_PATH; deliberately NOT injected as an env var.
+      - name: ollama-key
+        secret:
+          secretName: nano-agent-secrets
+          defaultMode: 0400
+          items:
+          - { key: OLLAMA_API_KEY, path: api-key }
 ---
 apiVersion: v1
 kind: Service

@@ -13,6 +13,7 @@ beat-by-beat. Run from the HOST:
 Live runs need docker+kind+kubectl+uv and the deployed CTO stack (see
 demos/08-cto/run-demo.sh)."""
 from __future__ import annotations
+import html
 import os
 import subprocess
 import sys
@@ -46,7 +47,12 @@ st.markdown(
 # CTO_SHOW_BEATS="1,7,8,9"; nothing is deleted — hidden beats stay in the driver
 # and recordings, they're just not surfaced here or driven on a live run.
 _env_beats = os.environ.get("CTO_SHOW_BEATS", "1,7,8,9")
-SHOW_BEATS = sorted(int(x) for x in _env_beats.split(",") if x.strip())
+try:
+    SHOW_BEATS = sorted(int(x) for x in _env_beats.split(",") if x.strip())
+except ValueError:
+    SHOW_BEATS = []
+if not SHOW_BEATS:                       # malformed or empty override → the default set,
+    SHOW_BEATS = [1, 7, 8, 9]            # never a blank nav + centre pane with no message.
 FULL_CATALOG = state.beat_catalog(DRIVE_PY)     # all 9: title + what-it-tests + question
 CATALOG = [b for b in FULL_CATALOG if b["beat"] in SHOW_BEATS]
 # Renumber the SHOWN beats sequentially for display (1..N) so a lean 1,7,8,9 set
@@ -112,10 +118,14 @@ def _beat_card(rec: dict) -> None:
         with st.expander("harness · " + " · ".join(bits)):
             st.json(h)
     st.write(rec["answer"])
-    detail = f" → {rec['outcome']['detail']}" if rec["outcome"]["detail"] else ""
+    # The chip is raw HTML (unsafe_allow_html), and outcome.detail can carry
+    # model-authored text (e.g. a refusal reason echoing the task 'kind'), so escape it
+    # — otherwise a crafted delegate_coding_task arg injects markup into the DOM.
+    raw_detail = rec["outcome"]["detail"]
+    detail = f" → {html.escape(raw_detail)}" if raw_detail else ""
     st.markdown(
         f"<span style='background:{color};color:white;padding:2px 10px;"
-        f"border-radius:10px;font-weight:700'>{label}{detail}</span>",
+        f"border-radius:10px;font-weight:700'>{html.escape(label)}{detail}</span>",
         unsafe_allow_html=True)
 
 
@@ -200,8 +210,16 @@ if not ss.primed and not ss.beats and ss.mode == "idle":
     _latest = state.latest_recording(RECORDINGS)
     if _latest:
         try:
-            ss.beats = state.load_recording(_latest)["beats"]
-        except (OSError, ValueError):
+            _rec = state.load_recording(_latest)
+            ss.beats = _rec["beats"]
+            # Pair the recorded beats with the recording's OWN ledger snapshot and enter
+            # replay mode, exactly as _start_replay does. Otherwise the right pane would
+            # show a previous run's answers beside today's LIVE chain, unlabelled — a
+            # mismatch for a console whose whole claim is that the ledger is ground truth.
+            _snap = _rec.get("ledger_snapshot")
+            if _snap is not None:
+                ss.snapshot, ss.mode = _snap, "replay"
+        except (OSError, ValueError, KeyError):
             pass
     ss.primed = True
 

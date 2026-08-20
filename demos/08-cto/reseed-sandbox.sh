@@ -13,7 +13,11 @@ if [ "$MODE" = "github" ]; then
     echo "⚠ gh/sandbox $REPO not reachable — skipping reseed"; exit 0
   fi
   echo "🧽 reseeding $REPO (github) ..."
-  for n in $(gh pr list -R "$REPO" --state open --json number --jq '.[].number' 2>/dev/null || true); do
+  # ONLY our own cto/* review branches — matching the branch-delete loop below. A
+  # bare `gh pr list` would close every open PR in the sandbox (a human's baseline
+  # fix, a dependency bump), and run-demo.sh invokes this automatically.
+  for n in $(gh pr list -R "$REPO" --state open --json number,headRefName \
+               --jq '.[] | select(.headRefName | startswith("cto/")) | .number' 2>/dev/null || true); do
     gh pr close -R "$REPO" "$n" --delete-branch 2>/dev/null || true
   done
   for b in $(gh api "repos/$REPO/branches" --jq '.[].name' 2>/dev/null | grep '^cto/' || true); do

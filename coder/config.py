@@ -34,8 +34,15 @@ class Settings:
         default_clone = ("file:///sandbox" if mode == "local"
                          else f"https://github.com/{repo}.git")
         gh_token = g("GH_TOKEN") or _read_file(g("GH_TOKEN_PATH", ""))
+        # Prefer a mounted file over the process environment: a key in OLLAMA_API_KEY
+        # is readable by any model-authored subprocess via /proc/1/environ (same uid,
+        # same pod), which sandbox_env() cannot scrub from the *parent*. Mounting it as
+        # a file (OLLAMA_API_KEY_PATH) and reading it once here keeps it out of the
+        # environment entirely — see coder/k8s/coder.yaml. The env var stays supported
+        # for local dev.
+        ollama_api_key = g("OLLAMA_API_KEY") or _read_file(g("OLLAMA_API_KEY_PATH", ""))
         return cls(
-            ollama_api_key=g("OLLAMA_API_KEY"),
+            ollama_api_key=ollama_api_key,
             ollama_base_url=g("OLLAMA_BASE_URL", "https://ollama.com/v1"),
             models={
                 "reasoning": g("CODER_REASONING_MODEL", default_model),

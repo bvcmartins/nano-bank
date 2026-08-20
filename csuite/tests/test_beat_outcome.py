@@ -66,3 +66,15 @@ def test_beat_outcome_delegated_local_branch_ref():
     got = beat_outcome(ev)
     assert got["kind"] == "delegated"
     assert "cto/fix-rounding-T" in got["detail"]
+
+
+def test_beat_outcome_failed_task_mentioning_executed_is_not_delegated():
+    # Finding 11: the failure result echoes the model-authored task into `summary`, so
+    # a task whose words include "executed" must NOT be misread as a delegated beat
+    # claiming a PR. Anchoring on the structured `outcome` field is what fixes it.
+    ev = _delegate_ev({"outcome": "failed",
+                       "summary": "delivery: make the executed-order test pass",
+                       "reason": "repo tests still red after coder rounds"})
+    got = beat_outcome(ev)
+    assert got["kind"] == "failed"
+    assert "PR opened" not in got.get("detail", "")

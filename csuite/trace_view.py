@@ -68,8 +68,13 @@ def beat_outcome(trace: list[dict], outcome_hint: str | None = None) -> dict:
     # opened (kind 'delegated', PR url as detail), 'failed' (coder error, no PR), or
     # 'refused'. Parse it before the binary restart/rollback path below.
     if last.get("name") == "delegate_coding_task":
-        low = text.lower()
-        if "executed" in low:
+        # Anchor on the STRUCTURED outcome field, not a substring: the failure path
+        # echoes up to 120 chars of the model-authored task into `summary`/`reason`, so
+        # a plain `"executed" in text` would render a failed delegation (e.g. task
+        # "make the executed-order test pass") as a blue DELEGATED chip claiming a PR.
+        m = re.search(r"['\"]outcome['\"]\s*:\s*['\"](\w+)['\"]", text)
+        outcome = (m.group(1) if m else "").lower()
+        if outcome == "executed":
             # pr_url is an https URL (github mode) or a local branch ref like
             # "cto/x-T @ file:///sandbox" (local mode) — capture either.
             m = re.search(r"pr_url['\"]?\s*[:=]\s*['\"]([^'\"]+)", text)
@@ -79,7 +84,7 @@ def beat_outcome(trace: list[dict], outcome_hint: str | None = None) -> dict:
                     "detail": (m.group(1).strip() if m and m.group(1).strip() else "PR opened")}
         m = re.search(r"reason['\"]?\s*[:=]\s*['\"]([^'\"]+)", text)
         detail = m.group(1) if m else ""
-        return {"kind": "failed" if "failed" in low else "refused", "detail": detail}
+        return {"kind": "failed" if outcome == "failed" else "refused", "detail": detail}
 
     kind = "refused" if "refused" in text.lower() else "executed"
 

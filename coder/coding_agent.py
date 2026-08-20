@@ -119,19 +119,26 @@ WORKSPACE.mkdir(parents=True, exist_ok=True)
 AGENT_CODE_DIR = WORKSPACE / "agent_code"
 AGENT_CODE_DIR.mkdir(exist_ok=True)
 # Where learned self-improvement instructions persist between runs (see CodingAgent).
-DEFAULT_POLICY_PATH = WORKSPACE / "learned_policy.json"
+# Deliberately OUTSIDE the WORKSPACE checkout: load_policy() reads this straight into
+# the system prompt, and the model's write_file is confined to WORKSPACE — so a policy
+# file living in the checkout would be model-writable and could edit its own prompt.
+# This is per-service state, not per-checkout state, so set_workspace does NOT rebind it.
+DEFAULT_POLICY_PATH = Path(os.environ.get(
+    "CODER_POLICY_PATH",
+    str(Path(tempfile.gettempdir()) / "coder-state" / "learned_policy.json"))).resolve()
 
 
 def set_workspace(path) -> None:
     """Re-point the module's WORKSPACE at an existing checkout (the coder service
     clones the sandbox, then calls this so the tools/gates operate on the repo).
-    Rebinds the globals the tool/gate functions look up by name at call time."""
-    global WORKSPACE, AGENT_CODE_DIR, DEFAULT_POLICY_PATH
+    Rebinds the globals the tool/gate functions look up by name at call time.
+    DEFAULT_POLICY_PATH is intentionally left alone — it is per-service state that
+    must stay outside the model-writable checkout (see its definition above)."""
+    global WORKSPACE, AGENT_CODE_DIR
     WORKSPACE = Path(path).resolve()
     WORKSPACE.mkdir(parents=True, exist_ok=True)
     AGENT_CODE_DIR = WORKSPACE / "agent_code"
     AGENT_CODE_DIR.mkdir(exist_ok=True)
-    DEFAULT_POLICY_PATH = WORKSPACE / "learned_policy.json"
 
 # --- Limits ------------------------------------------------------------------
 MAX_TOOL_OUTPUT = 12_000
@@ -141,6 +148,10 @@ REQUEST_TIMEOUT_S = 600
 MAX_ITERATIONS = 20
 MAX_INSTRUCTIONS = 40  # cap the learned-guidance block so the prompt can't grow unbounded
 
+# A fat-finger guard, NOT a security boundary: plain substring matching, so trivial
+# variants (`rm -fr /`, `cd / && rm -rf *`, a base64-decoded command) sail past it.
+# Real containment is the pod spec (non-root, read-only rootfs, dropped caps, scrubbed
+# subprocess env, egress firewall) — never rely on this list to stop hostile input.
 BASH_BLOCKLIST = ["rm -rf /", "sudo", "shutdown", "reboot", "mkfs", "> /dev/", ":(){ :|:& };:"]
 _HAS_PYTEST = importlib.util.find_spec("pytest") is not None
 
@@ -367,7 +378,10 @@ CODER_SYSTEM_PROMPT = (
     "them.\n"
     "4. Say 'I don't know' or surface an assumption explicitly rather than guessing silently.\n"
     "5. Output COMPLETE, self-contained source — no placeholders, no '...', no TODOs. Handle "
-    "the edge cases (empty inputs, bounds, None) the task implies."
+    "the edge cases (empty inputs, bounds, None) the task implies.\n"
+    "6. Stay inside the task's footprint. Edit only the repo's source files needed for the "
+    "task; never touch `.git/`, CI/workflow config (e.g. `.github/`), or files outside the "
+    "change. If the task seems to require any of those, say so instead of doing it."
 )
 
 _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
@@ -449,7 +463,13 @@ def lint_python(code: str) -> dict:
 # ollama key (to call the LLM), but every subprocess that runs MODEL-AUTHORED code
 # (bash / run_python / pytest) gets a SCRUBBED environment, so a malicious test or
 # snippet cannot read and exfiltrate credentials from the pod env.
-_SECRET_ENV_RE = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)", re.I)
+# A denylist heuristic, not an allowlist: it matches this pod's actual secret names
+# and a few common shapes, but does NOT generalise — a differently-named secret
+# (SSH_*, *_PEM, *_PRIVATE beyond the patterns below) would need adding here. It is a
+# second line of defence; the primary control is that this pod carries no secret in
+# its environment at all (the ollama key is a mounted file — see config.from_env).
+_SECRET_ENV_RE = re.compile(
+    r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|PRIVATE|PEM|SSH)", re.I)
 
 
 def sandbox_env() -> dict:
@@ -526,7 +546,9 @@ def write_file(path: str, content: str) -> str:
 
 @tool
 def bash(command: str) -> str:
-    """Run a shell command in the workspace (blocklisted destructive commands are refused)."""
+    """Run a shell command in the workspace. A small guard rejects a few obviously
+    destructive command strings (fat-finger protection, not a security boundary —
+    containment is the pod sandbox)."""
     for bad in BASH_BLOCKLIST:
         if bad in command:
             return f"Error: blocked by safety policy (matched {bad!r})"
@@ -580,11 +602,16 @@ def build_agent_graph(tools, system: str, role: str = "fast", reasoning: bool = 
     """START -> agent -> (tools_condition) -> tools -> agent -> ... -> END."""
     model = llm(role, reasoning=reasoning).bind_tools(tools)
 
-    def agent_node(state: MessagesState):
+    def agent_node(state: MessagesState, config=None):
         msgs = list(state["messages"])
         if not msgs or not isinstance(msgs[0], SystemMessage):
             msgs = [SystemMessage(system)] + msgs
-        return {"messages": [model.invoke(msgs, config=CB)]}
+        # Thread the incoming graph config into the model call. Its callbacks include
+        # the tracer AND any TranscriptCollector the service attached; hardcoding CB
+        # here would drop every model turn from the transcript (tool steps still land
+        # via ToolNode under the graph config, but the reasoning narrative would
+        # silently vanish — which is the whole point of the 'coder in action' pane).
+        return {"messages": [model.invoke(msgs, config=config or CB)]}
 
     g = StateGraph(MessagesState)
     g.add_node("agent", agent_node)
@@ -745,6 +772,7 @@ class CodingAgent:
 
     def save_policy(self, path: Optional[os.PathLike] = None) -> Path:
         p = Path(path) if path else self.policy_path
+        p.parent.mkdir(parents=True, exist_ok=True)   # DEFAULT_POLICY_PATH lives outside any checkout
         p.write_text(json.dumps({"instructions": self.instructions}, indent=2), encoding="utf-8")
         return p
 

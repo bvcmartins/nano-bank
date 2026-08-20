@@ -124,8 +124,18 @@ def coder_timeline(coder_run: dict) -> list[dict]:
                       "label": "diff on the review branch", "body": diff})
     tests = coder_run.get("tests", "")
     branch = coder_run.get("branch", "")
-    steps.append({"icon": "✅", "kind": "result",
+    # Reflect the ACTUAL outcome, not a hardcoded success line — a stored failed run
+    # (red suite or no change) must not claim a gated PR was opened.
+    outcome = coder_run.get("outcome", "executed")
+    if outcome == "executed":
+        icon = "✅"
+        tail = (f"branch: {branch}\n"
+                "gated PR — a human reviews and merges (never auto-merged).")
+    else:
+        icon = "❌"
+        reason = coder_run.get("reason", "")
+        tail = f"{outcome}{(' — ' + reason) if reason else ''}\nno PR opened."
+    steps.append({"icon": icon, "kind": "result",
                   "label": "Coder → CTO  (result)",
-                  "body": f"tests: {tests}   ·   branch: {branch}\n"
-                          "gated PR — a human reviews and merges (never auto-merged)."})
+                  "body": f"tests: {tests}   ·   {tail}"})
     return steps

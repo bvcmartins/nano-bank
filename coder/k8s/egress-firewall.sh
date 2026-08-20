@@ -38,6 +38,19 @@ do_status() {
   iptables -S "$CHAIN" | grep "$TAG" || echo "(no $TAG rules installed)"
 }
 
+# Exit non-zero if the containment rules are absent — for a health check. DOCKER-USER
+# rules do NOT survive a Docker restart or host reboot, so containment can lapse
+# silently while the pod still looks deployed; a caller (deploy.sh, a systemd unit)
+# can gate on this.
+do_verify() {
+  if iptables -S "$CHAIN" 2>/dev/null | grep -q "$TAG"; then
+    echo "✓ $TAG egress rules present"
+  else
+    echo "✗ $TAG egress rules ABSENT — the coder is NOT contained (re-run without --verify)" >&2
+    exit 1
+  fi
+}
+
 do_remove() {
   # Delete any rule carrying our tag (loop until none remain).
   while iptables -S "$CHAIN" | grep -q "$TAG"; do
@@ -63,5 +76,6 @@ do_install() {
 case "${1:-}" in
   --remove) do_remove ;;
   --status) do_status ;;
+  --verify) do_verify ;;
   *)        do_install ;;
 esac

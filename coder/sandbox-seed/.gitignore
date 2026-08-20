@@ -1,3 +1,12 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# The coder's own scratch tools drop these into the checkout root; they are the
+# agent's footprint, never part of a delegated change. Ignored so they never reach a
+# review branch even if the staging-time exclude in service.py is ever bypassed.
+_spec_test.py
+_run.py
+agent_code/
+learned_policy.json
+_selftest_policy.json

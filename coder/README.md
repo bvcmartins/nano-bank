@@ -77,10 +77,12 @@ depth:
 
 - **Filesystem** — no host mount; the model sees only the sandbox + a `/tmp`
   scratch dir. Your other repos and personal files are not present in the pod.
-- **Secrets** — only `OLLAMA_API_KEY` is injected (not the whole
-  `nano-agent-secrets`), and `coding_agent.sandbox_env()` scrubs every
-  credential-looking var from the environment of any subprocess that runs model
-  code (`bash` / `run_python` / pytest), so a malicious test can't exfiltrate it.
+- **Secrets** — only the `OLLAMA_API_KEY` is provided (not the whole
+  `nano-agent-secrets`), and it is mounted as a **file** (`OLLAMA_API_KEY_PATH`),
+  read once at startup — never placed in the process environment, so model-authored
+  code cannot read it back from `/proc/1/environ`. `coding_agent.sandbox_env()`
+  additionally scrubs every credential-looking var from any subprocess that runs
+  model code (`bash` / `run_python` / pytest) as defence in depth.
 - **Pod** — non-root, read-only rootfs (only `/tmp` + `/sandbox` writable), all
   Linux capabilities dropped, no privilege escalation, seccomp `RuntimeDefault`,
   and no Kubernetes API token.
@@ -88,7 +90,18 @@ depth:
   `sudo coder/k8s/egress-firewall.sh` to deny every kind pod from reaching this
   host and the LAN (pod-to-pod and internet stay up). Internet egress is left open
   for `ollama.com` and is harmless: with the above, the pod has nothing sensitive
-  to send. `--remove` reverses it, `--status` shows the rules.
+  to send. `--remove` reverses it, `--status` shows the rules, `--verify` exits
+  non-zero if they're absent (the rules live in `DOCKER-USER` and do **not** survive
+  a Docker restart or host reboot, so `deploy.sh` re-checks and warns loudly).
+
+## Run transcripts (`GET /runs`)
+
+Recent runs' transcripts (for the presentation console's "coder in action" replay)
+live in an **in-process** `OrderedDict` (last ~20). It is deliberately ephemeral —
+it **empties on a pod restart**, and it is not shared across replicas (there is only
+one). Both executed and `failed` runs are retained, so a red or no-change run is
+still inspectable at `GET /runs/latest`; failed runs have no branch and are keyed by
+timestamp.
 
 ## github mode (opt-in)
 

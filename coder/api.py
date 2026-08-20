@@ -1,3 +1,13 @@
+"""FastAPI surface for the coder service (:8096).
+
+TRUST BOUNDARY: these endpoints are UNAUTHENTICATED, by design and consistent with
+the other in-cluster services — but this one has more teeth than a read-only status
+API. POST /code-task triggers an LLM-backed coding run and a branch push; GET /runs/*
+returns a run's full agent transcript and diff. The compensating controls are network,
+not application: the coder is reachable only in-cluster (a ClusterIP Service, no
+Ingress) and the egress firewall denies pod->host/LAN, so nothing outside the
+namespace can call it. If this service is ever exposed beyond the cluster, put an
+auth gate in front of /code-task and /runs FIRST."""
 from __future__ import annotations
 import logging
 from typing import Callable, Optional
