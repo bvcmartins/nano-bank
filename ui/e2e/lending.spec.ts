@@ -19,18 +19,36 @@ const PASSWORD = "password123";
 
 // Helper to update KYC status in Postgres
 async function verifyKycInDb(email: string) {
-  const connectionString =
-    process.env.DATABASE_URL ||
-    "postgres://nanobank_user:secure_nano_password_2024!@localhost:5432/nano_bank_db";
-
-  const client = new Client({ connectionString });
-  try {
+  if (process.env.DATABASE_URL) {
+    const client = new Client({ connectionString: process.env.DATABASE_URL });
     await client.connect();
     await client.query("UPDATE customers SET kyc_status = 'verified' WHERE email = $1", [email]);
-  } catch (err) {
-    console.error(`Failed to verify KYC for ${email} in database:`, err);
-  } finally {
     await client.end();
+    return;
+  }
+
+  // Resolve credentials from environment variables, fallback to local dev defaults
+  const pgUser = process.env.PGUSER || "nanobank_user";
+  const pgPassword = process.env.PGPASSWORD || "secure_nano_password_2024!";
+  const pgDatabase = process.env.PGDATABASE || "nano_bank_db";
+
+  // Attempt connection on port 55432 (local Colima bypass channel)
+  try {
+    const client55432 = new Client({
+      connectionString: `postgres://${pgUser}:${pgPassword}@127.0.0.1:55432/${pgDatabase}`,
+    });
+    await client55432.connect();
+    await client55432.query("UPDATE customers SET kyc_status = 'verified' WHERE email = $1", [email]);
+    await client55432.end();
+    return;
+  } catch (err) {
+    // Fallback to standard 5432
+    const client5432 = new Client({
+      connectionString: `postgres://${pgUser}:${pgPassword}@127.0.0.1:5432/${pgDatabase}`,
+    });
+    await client5432.connect();
+    await client5432.query("UPDATE customers SET kyc_status = 'verified' WHERE email = $1", [email]);
+    await client5432.end();
   }
 }
 
