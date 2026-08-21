@@ -1,6 +1,6 @@
 [database]
-host = "::1"
-port = 5432
+host = "127.0.0.1"
+port = 55432
 username = "nanobank_user"
 password = "secure_nano_password_2024!"
 database_name = "nano_bank_db"

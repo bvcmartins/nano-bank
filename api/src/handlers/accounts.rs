@@ -43,6 +43,11 @@ fn opening_terms(account_type: &AccountType) -> OpeningTerms {
             interest_rate: Decimal::new(1999, 4), // 0.1999 = 19.99% APR
             credit_limit: Decimal::new(5000, 0),  // $5,000.00
         },
+        // Direct creation of loan accounts is blocked; returned terms are inert placeholders.
+        AccountType::Loan => OpeningTerms {
+            interest_rate: Decimal::ZERO,
+            credit_limit: Decimal::ZERO,
+        },
     }
 }
 
@@ -122,6 +127,10 @@ async fn create_account(
     auth: AuthenticatedCustomer,
     Json(payload): Json<CreateAccountRequest>,
 ) -> Result<(StatusCode, Json<AccountResponse>), AppError> {
+    if matches!(payload.account_type, AccountType::Loan) {
+        return Err(AppError::BadRequest("Direct creation of loan accounts is not allowed".to_string()));
+    }
+
     let terms = opening_terms(&payload.account_type);
 
     // Idempotency replay: same (customer, key) returns the original account

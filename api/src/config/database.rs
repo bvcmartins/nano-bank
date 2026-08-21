@@ -471,6 +471,39 @@ pub async fn run_migrations(pool: &DatabasePool) -> Result<(), sqlx::Error> {
         END;
         $$ LANGUAGE plpgsql
         "#,
+        r#"
+        CREATE OR REPLACE FUNCTION update_account_balance()
+        RETURNS TRIGGER AS $$
+        DECLARE
+            current_balance DECIMAL(15,2);
+            new_balance DECIMAL(15,2);
+            current_overdraft DECIMAL(15,2);
+        BEGIN
+            -- Get current account balance and overdraft
+            SELECT balance, overdraft_limit INTO current_balance, current_overdraft FROM accounts WHERE account_id = NEW.account_id;
+
+            -- Calculate new balance
+            IF NEW.entry_type = 'credit' THEN
+                new_balance := current_balance + NEW.amount;
+            ELSE
+                new_balance := current_balance - NEW.amount;
+            END IF;
+
+            -- Update account balance and available balance to prevent logical constraint violations
+            UPDATE accounts
+            SET balance = new_balance,
+                available_balance = new_balance + current_overdraft - COALESCE((SELECT sum(amount) FROM account_holds WHERE account_id = NEW.account_id AND released_at IS NULL), 0),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE account_id = NEW.account_id;
+
+            -- Update the balance_before in the entry
+            NEW.balance_before := current_balance;
+            NEW.balance_after := new_balance;
+
+            RETURN NEW;
+        END;
+        $$ language 'plpgsql'
+        "#,
     ] {
         sqlx::query(ddl).execute(pool).await?;
     }

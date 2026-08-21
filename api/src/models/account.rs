@@ -12,6 +12,7 @@ pub enum AccountType {
     Chequing,
     Savings,
     CreditCard,
+    Loan,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
