@@ -61,6 +61,18 @@ jobs:
         run: cargo build --all-targets
         working-directory: api
 
+      - name: Start Mock Ledger
+        run: |
+          python3 testing/mock_ledger.py &
+          echo "Waiting for mock ledger to be ready..."
+          for i in {1..30}; do
+            if curl -s http://localhost:8091/health > /dev/null; then
+              echo "Mock ledger is ready!"
+              break
+            fi
+            sleep 1
+          done
+
       - name: Start API Server
         env:
           NANO_BANK__DATABASE__HOST: 127.0.0.1
@@ -68,6 +80,8 @@ jobs:
           NANO_BANK__DATABASE__USERNAME: nanobank_user
           NANO_BANK__DATABASE__PASSWORD: secure_nano_password_2024!
           NANO_BANK__DATABASE__DATABASE_NAME: nano_bank_db
+          CORE_BACKEND: modern
+          MODERN_CORE_URL: http://localhost:8091
         run: |
           cargo run &
           echo "Waiting for API to be ready..."
@@ -87,5 +101,11 @@ jobs:
           NANO_BANK__DATABASE__USERNAME: nanobank_user
           NANO_BANK__DATABASE__PASSWORD: secure_nano_password_2024!
           NANO_BANK__DATABASE__DATABASE_NAME: nano_bank_db
+          CORE_BACKEND: modern
+          MODERN_CORE_URL: http://localhost:8091
+          # test_db()'s default fallback uses [::1] (the local Kind port-forward
+          # convention); CI's Postgres service is only reachable via 127.0.0.1,
+          # so point it there explicitly rather than silently skipping DB tests.
+          NANO_BANK_TEST_DB_URL: postgres://nanobank_user:secure_nano_password_2024!@127.0.0.1:5432/nano_bank_db
         run: cargo test -- --nocapture
         working-directory: api

@@ -42,7 +42,7 @@ async fn test_loan_lifecycle() {
     assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
     let err_val: Value = resp.json().await.unwrap();
     assert!(
-        err_val["error"].as_str().unwrap().contains("KYC"),
+        err_val["error"]["message"].as_str().unwrap().contains("KYC"),
         "error should indicate KYC requirement"
     );
 
@@ -220,6 +220,22 @@ async fn test_loan_lifecycle() {
         .await
         .unwrap();
     assert_eq!(as_num(&loan_bal_after_repay["balance"]), -9002.33);
+
+    // Interest accrual grows the loan's debt beyond the $10,000 originally
+    // disbursed into chequing without ever crediting chequing for it, so a
+    // full payoff needs a top-up to cover the accrued interest first.
+    let topup_resp = post_json(
+        &c,
+        &token,
+        "/api/v1/transactions/deposit",
+        json!({ "account_id": chequing_id, "amount": 10.00, "description": "top-up for final loan payoff" }),
+    )
+    .await;
+    assert!(
+        topup_resp.status().is_success(),
+        "top-up deposit: {}",
+        topup_resp.status()
+    );
 
     // 12. Repay the entire remaining balance ($9002.33)
     let final_repay_resp = post_json(

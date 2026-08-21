@@ -1,4 +1,3 @@
-use rust_decimal::prelude::*;
 use rust_decimal::Decimal;
 
 /// Calculates the monthly payment (PMT) for a loan using the standard amortization formula.
@@ -25,19 +24,30 @@ pub fn calculate_monthly_payment(
         return Some((principal / months_dec).round_dp(2));
     }
 
-    // Convert values to f64 to perform floating-point exponentiation.
-    let p_f64 = principal.to_f64()?;
-    let r_annual_f64 = annual_rate.to_f64()?;
-    let r_monthly_f64 = r_annual_f64 / 12.0;
-    let n_f64 = months as f64;
+    // months is a small non-negative integer exponent, so (1 + r)^n is computed
+    // by exact repeated Decimal multiplication rather than f64 powf — this is an
+    // all-Decimal codebase, and f64 exponentiation introduced binary-rounding
+    // error (and could spuriously fail Decimal::from_f64) into a financial
+    // calculation for no precision benefit.
+    let monthly_rate = annual_rate.checked_div(Decimal::from(12))?;
+    let one_plus_r = Decimal::ONE.checked_add(monthly_rate)?;
 
-    // Standard PMT calculation:
-    // PMT = P * r * (1 + r)^n / ((1 + r)^n - 1)
-    let one_plus_r_n = (1.0 + r_monthly_f64).powf(n_f64);
-    let pmt_f64 = p_f64 * (r_monthly_f64 * one_plus_r_n) / (one_plus_r_n - 1.0);
+    let mut one_plus_r_n = Decimal::ONE;
+    for _ in 0..months {
+        one_plus_r_n = one_plus_r_n.checked_mul(one_plus_r)?;
+    }
 
-    // Convert back to Decimal and round to 2 decimal places.
-    Decimal::from_f64(pmt_f64).map(|d| d.round_dp(2))
+    let denominator = one_plus_r_n.checked_sub(Decimal::ONE)?;
+    if denominator == Decimal::ZERO {
+        return None;
+    }
+
+    let numerator = principal
+        .checked_mul(monthly_rate)?
+        .checked_mul(one_plus_r_n)?;
+    let pmt = numerator.checked_div(denominator)?;
+
+    Some(pmt.round_dp(2))
 }
 
 #[cfg(test)]

@@ -128,7 +128,9 @@ async fn create_account(
     Json(payload): Json<CreateAccountRequest>,
 ) -> Result<(StatusCode, Json<AccountResponse>), AppError> {
     if matches!(payload.account_type, AccountType::Loan) {
-        return Err(AppError::BadRequest("Direct creation of loan accounts is not allowed".to_string()));
+        return Err(AppError::BadRequest(
+            "Direct creation of loan accounts is not allowed".to_string(),
+        ));
     }
 
     let terms = opening_terms(&payload.account_type);

@@ -149,7 +149,10 @@ async fn test_double_disbursement_blocked() {
     assert_eq!(disburse_2.status(), reqwest::StatusCode::BAD_REQUEST);
     let err_val: Value = disburse_2.json().await.unwrap();
     assert!(
-        err_val["error"].as_str().unwrap().contains("not pending disbursement"),
+        err_val["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("not pending disbursement"),
         "error should indicate loan is not pending disbursement"
     );
 }
@@ -200,11 +203,24 @@ async fn test_insufficient_funds_on_repayment() {
         .await
         .unwrap();
 
+    // The default daily_withdrawal_limit ($1,000, on account_limits) is well
+    // under the $5,000 disbursement, and this test isn't exercising withdrawal
+    // limits, so raise it directly rather than drip-withdrawing in $1,000
+    // increments.
+    sqlx::query(
+        "INSERT INTO account_limits (account_id, daily_withdrawal_limit) VALUES ($1, 10000.00) \
+         ON CONFLICT (account_id) DO UPDATE SET daily_withdrawal_limit = 10000.00",
+    )
+    .bind(chequing)
+    .execute(&pool)
+    .await
+    .unwrap();
+
     // Withdraw the disbursed money to ensure chequing balance is 0.00
     let withdraw_resp = post_json(
         &c,
         &token,
-        "/api/v1/transactions/withdraw",
+        "/api/v1/transactions/withdrawal",
         json!({
             "account_id": chequing,
             "amount": 5000.00,
@@ -227,7 +243,7 @@ async fn test_insufficient_funds_on_repayment() {
     .await;
     assert_eq!(repay_resp.status(), reqwest::StatusCode::BAD_REQUEST);
     let err_val: Value = repay_resp.json().await.unwrap();
-    assert_eq!(err_val["code"].as_str().unwrap(), "INSUFFICIENT_FUNDS");
+    assert_eq!(err_val["error"]["code"].as_str().unwrap(), "INSUFFICIENT_FUNDS");
 }
 
 // ---------------------------------------------------------------------------
@@ -293,7 +309,11 @@ async fn test_overpayment_protection() {
 
     // Verify chequing balance is $2000.00
     let bal_val: Value = c
-        .get(format!("{}/api/v1/accounts/{}/balance", base_url(), chequing))
+        .get(format!(
+            "{}/api/v1/accounts/{}/balance",
+            base_url(),
+            chequing
+        ))
         .bearer_auth(&token)
         .send()
         .await
@@ -320,7 +340,11 @@ async fn test_overpayment_protection() {
 
     // The loan account should be fully paid off (balance = 0.00)
     let loan_bal: Value = c
-        .get(format!("{}/api/v1/accounts/{}/balance", base_url(), loan_account_id))
+        .get(format!(
+            "{}/api/v1/accounts/{}/balance",
+            base_url(),
+            loan_account_id
+        ))
         .bearer_auth(&token)
         .send()
         .await
@@ -333,7 +357,11 @@ async fn test_overpayment_protection() {
     // Crucially, the funding chequing account should have been debited by exactly $1,000.00
     // (the capped remaining debt), NOT $1,500.00! Its balance should be $1,000.00.
     let chequing_bal: Value = c
-        .get(format!("{}/api/v1/accounts/{}/balance", base_url(), chequing))
+        .get(format!(
+            "{}/api/v1/accounts/{}/balance",
+            base_url(),
+            chequing
+        ))
         .bearer_auth(&token)
         .send()
         .await
@@ -381,7 +409,7 @@ async fn test_invalid_loan_application_parameters() {
     assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
     let err_val: Value = resp.json().await.unwrap();
     assert!(
-        err_val["error"].as_str().unwrap().contains("positive"),
+        err_val["error"]["message"].as_str().unwrap().contains("positive"),
         "error should state principal must be positive"
     );
 
@@ -400,7 +428,10 @@ async fn test_invalid_loan_application_parameters() {
     assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
     let err_val: Value = resp.json().await.unwrap();
     assert!(
-        err_val["error"].as_str().unwrap().contains("between 0 and 1"),
+        err_val["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("between 0 and 1"),
         "error should state rate must be between 0 and 1"
     );
 
@@ -419,7 +450,7 @@ async fn test_invalid_loan_application_parameters() {
     assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
     let err_val: Value = resp.json().await.unwrap();
     assert!(
-        err_val["error"].as_str().unwrap().contains("positive"),
+        err_val["error"]["message"].as_str().unwrap().contains("positive"),
         "error should state amortization months must be positive"
     );
 }
@@ -476,7 +507,11 @@ async fn test_interest_accrual_only_on_active_loans() {
 
     // Verify loan account balance is still 0 (no interest accrued on pending disbursement loan)
     let loan_bal: Value = c
-        .get(format!("{}/api/v1/accounts/{}/balance", base_url(), loan_account_id))
+        .get(format!(
+            "{}/api/v1/accounts/{}/balance",
+            base_url(),
+            loan_account_id
+        ))
         .bearer_auth(&token)
         .send()
         .await
@@ -495,7 +530,11 @@ async fn test_interest_accrual_only_on_active_loans() {
 
     // Verify loan account balance is now -10000.00
     let loan_bal_active: Value = c
-        .get(format!("{}/api/v1/accounts/{}/balance", base_url(), loan_account_id))
+        .get(format!(
+            "{}/api/v1/accounts/{}/balance",
+            base_url(),
+            loan_account_id
+        ))
         .bearer_auth(&token)
         .send()
         .await
@@ -515,7 +554,11 @@ async fn test_interest_accrual_only_on_active_loans() {
     assert_eq!(accrue_resp.status(), reqwest::StatusCode::OK);
 
     let loan_bal_accrued: Value = c
-        .get(format!("{}/api/v1/accounts/{}/balance", base_url(), loan_account_id))
+        .get(format!(
+            "{}/api/v1/accounts/{}/balance",
+            base_url(),
+            loan_account_id
+        ))
         .bearer_auth(&token)
         .send()
         .await

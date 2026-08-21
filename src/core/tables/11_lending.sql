@@ -18,6 +18,10 @@ CREATE TABLE loans (
     status VARCHAR(50) DEFAULT 'pending_disbursement' NOT NULL,
     
     next_payment_date DATE NOT NULL,
+    -- Guards admin_accrue_interest so a retried/overlapping call can't double-
+    -- charge a loan the same day: the handler claims the date with a guarded
+    -- UPDATE before posting any interest.
+    last_interest_accrual_date DATE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
     

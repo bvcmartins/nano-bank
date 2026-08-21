@@ -18,32 +18,37 @@ export default async function Page() {
     const { accessToken, profile } = await requireSession();
     const tokenExpiry = decodeJwtExpiry(accessToken);
 
-    // Fetch accounts and loans in parallel
+    // Fetch accounts and loans in parallel; a loans-fetch failure is
+    // non-critical (loans is a newer, secondary widget) and must not blank out
+    // the accounts view, so the two are handled independently.
     let accounts: Account[] = [];
     let loans: LoanSummary[] = [];
     let fetchError = false;
-    try {
-        const [accRes, loansRes] = await Promise.all([
-            fetch(`${API_BASE_URL}/api/v1/accounts`, {
-                headers: { Authorization: `Bearer ${accessToken}` },
-                cache: "no-store",
-            }),
-            fetch(`${API_BASE_URL}/api/v1/loans`, {
-                headers: { Authorization: `Bearer ${accessToken}` },
-                cache: "no-store",
-            })
-        ]);
 
-        if (accRes.ok && loansRes.ok) {
-            accounts = await accRes.json();
-            loans = await loansRes.json();
-        } else {
-            console.error(`Failed to fetch dashboard data. Accounts: ${accRes.status}, Loans: ${loansRes.status}`);
-            fetchError = true;
-        }
-    } catch (error) {
-        console.error("Failed to fetch dashboard metrics:", error);
+    const [accResult, loansResult] = await Promise.allSettled([
+        fetch(`${API_BASE_URL}/api/v1/accounts`, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+            cache: "no-store",
+        }),
+        fetch(`${API_BASE_URL}/api/v1/loans`, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+            cache: "no-store",
+        }),
+    ]);
+
+    if (accResult.status === "fulfilled" && accResult.value.ok) {
+        accounts = await accResult.value.json();
+    } else {
+        const detail = accResult.status === "fulfilled" ? accResult.value.status : accResult.reason;
+        console.error(`Failed to fetch accounts: ${detail}`);
         fetchError = true;
+    }
+
+    if (loansResult.status === "fulfilled" && loansResult.value.ok) {
+        loans = await loansResult.value.json();
+    } else {
+        const detail = loansResult.status === "fulfilled" ? loansResult.value.status : loansResult.reason;
+        console.error(`Failed to fetch loans: ${detail}`);
     }
 
     // Filter and aggregate

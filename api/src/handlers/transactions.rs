@@ -1173,7 +1173,10 @@ fn push_filters(
 
 /// Reject credit-card accounts (they use the card rails) and non-active status.
 fn ensure_operable(account: &Account) -> Result<(), AppError> {
-    if matches!(account.account_type, AccountType::CreditCard | AccountType::Loan) {
+    if matches!(
+        account.account_type,
+        AccountType::CreditCard | AccountType::Loan
+    ) {
         return Err(AppError::BadRequest(
             "credit card accounts use the card endpoints".to_string(),
         ));
@@ -1339,7 +1342,10 @@ async fn account_balance(tx: &mut Tx<'_>, account_id: Uuid) -> Result<Decimal, s
 /// first is always safe (the post-debit balance stays ≥ 0 because we verified
 /// `available_balance >= amount`); [`recompute_available`] restores the correct
 /// value afterward. Credited accounts never need this (their balance only rises).
-pub(crate) async fn set_available_zero(tx: &mut Tx<'_>, account_id: Uuid) -> Result<(), sqlx::Error> {
+pub(crate) async fn set_available_zero(
+    tx: &mut Tx<'_>,
+    account_id: Uuid,
+) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE accounts SET available_balance = 0 WHERE account_id = $1")
         .bind(account_id)
         .execute(&mut **tx)
@@ -1349,7 +1355,10 @@ pub(crate) async fn set_available_zero(tx: &mut Tx<'_>, account_id: Uuid) -> Res
 
 /// Recompute a deposit account's available balance: `balance + overdraft − open holds`.
 /// (Deposit accounts have a 0 overdraft; the term keeps the formula general.)
-pub(crate) async fn recompute_available(tx: &mut Tx<'_>, account_id: Uuid) -> Result<Decimal, sqlx::Error> {
+pub(crate) async fn recompute_available(
+    tx: &mut Tx<'_>,
+    account_id: Uuid,
+) -> Result<Decimal, sqlx::Error> {
     sqlx::query_scalar(
         r#"
         UPDATE accounts

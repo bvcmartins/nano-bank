@@ -11,7 +11,10 @@ use uuid::Uuid;
 
 use crate::errors::AppError;
 use crate::handlers::cards::{post_gl_entry, post_two_legged, reference_number, Tx};
-use crate::handlers::transactions::{ensure_external_cash_account, insert_transaction, recompute_available, set_available_zero, lock_accounts_cash_last};
+use crate::handlers::transactions::{
+    ensure_external_cash_account, insert_transaction, lock_accounts_cash_last, recompute_available,
+    set_available_zero,
+};
 use crate::handlers::AppState;
 use crate::ledger::Account as GlAccount;
 use crate::middleware::auth::{AuthenticatedCustomer, AuthenticatedService};
@@ -99,12 +102,19 @@ async fn apply_for_loan(
     let mut tx = state.pool.begin().await?;
 
     // Create a new loan account
-    // Available balance starts at 0; interest_rate and overdraft_limit = 0.
+    // Available balance starts at 0; interest_rate = 0. overdraft_limit is set to
+    // the same $1T headroom used by system accounts (cards.rs, transactions.rs)
+    // rather than 0: the loan account's balance goes negative by principal (plus
+    // accruing interest over the life of the loan) and available_balance is kept
+    // at 0 via set_available_zero/recompute_available (customers never operate on
+    // this account directly — ensure_operable rejects Loan accounts), so a real
+    // overdraft cap would only trip the accounts table's chk_available_balance_logical
+    // CHECK on every disbursement/accrual for no behavioural benefit.
     // The account-number trigger generates a unique 12-digit number automatically on insert.
     let account_id: Uuid = sqlx::query_scalar(
         r#"
         INSERT INTO accounts (customer_id, account_number, account_type, status, interest_rate, overdraft_limit, balance, available_balance)
-        VALUES ($1, '000000000000', 'loan', 'pending_activation', $2, 0, 0, 0)
+        VALUES ($1, '000000000000', 'loan', 'pending_activation', $2, 1000000000000, 0, 0)
         RETURNING account_id
         "#
     )
@@ -196,8 +206,10 @@ async fn disburse_loan(
         ));
     }
 
-    // Locate the customer's first active chequing account
-    let dest_account_id: Uuid = sqlx::query_scalar(
+    // Locate the customer's first active chequing account, falling back to
+    // savings only when no chequing account exists (the fallback query only
+    // runs when needed).
+    let chequing_id: Option<Uuid> = sqlx::query_scalar(
         "SELECT account_id FROM accounts \
          WHERE customer_id = $1 AND status = 'active' AND account_type = 'chequing' \
          ORDER BY created_at LIMIT 1",
@@ -205,10 +217,11 @@ async fn disburse_loan(
     .bind(auth.customer_id)
     .fetch_optional(&state.pool)
     .await
-    .map_err(AppError::Database)?
-    .or(
-        // fallback to savings if no active chequing
-        sqlx::query_scalar(
+    .map_err(AppError::Database)?;
+
+    let dest_account_id: Uuid = match chequing_id {
+        Some(id) => id,
+        None => sqlx::query_scalar(
             "SELECT account_id FROM accounts \
              WHERE customer_id = $1 AND status = 'active' AND account_type = 'savings' \
              ORDER BY created_at LIMIT 1",
@@ -216,11 +229,13 @@ async fn disburse_loan(
         .bind(auth.customer_id)
         .fetch_optional(&state.pool)
         .await
-        .map_err(AppError::Database)?,
-    )
-    .ok_or_else(|| {
-        AppError::BadRequest("No active deposit account found to receive disbursement".to_string())
-    })?;
+        .map_err(AppError::Database)?
+        .ok_or_else(|| {
+            AppError::BadRequest(
+                "No active deposit account found to receive disbursement".to_string(),
+            )
+        })?,
+    };
 
     let mut tx = state.pool.begin().await?;
 
@@ -276,7 +291,9 @@ async fn disburse_loan(
     .await?;
 
     if result.rows_affected() == 0 {
-        return Err(AppError::Conflict("Loan is no longer pending disbursement".to_string()));
+        return Err(AppError::Conflict(
+            "Loan is no longer pending disbursement".to_string(),
+        ));
     }
 
     sqlx::query("UPDATE accounts SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE account_id = $1")
@@ -400,20 +417,30 @@ async fn repay_loan(
             .await?;
     }
 
-    // Determine remaining debt and funding balance AFTER locks are acquired
-    let funding_avail_balance: Decimal = sqlx::query_scalar("SELECT available_balance FROM accounts WHERE account_id = $1")
-        .bind(funding.account_id)
-        .fetch_one(&mut *tx)
-        .await?;
+    // Determine funding status/balance AFTER locks are acquired: the pre-lock
+    // check above can go stale if the account is closed/frozen between that
+    // check and the lock, so re-verify status here too.
+    let (funding_status, funding_avail_balance): (crate::models::account::AccountStatus, Decimal) =
+        sqlx::query_as("SELECT status, available_balance FROM accounts WHERE account_id = $1")
+            .bind(funding.account_id)
+            .fetch_one(&mut *tx)
+            .await?;
+
+    if funding_status != crate::models::account::AccountStatus::Active {
+        return Err(AppError::BadRequest(
+            "Funding account is not active".to_string(),
+        ));
+    }
 
     if funding_avail_balance < amount {
         return Err(AppError::InsufficientFunds);
     }
 
-    let loan_account_balance: Decimal = sqlx::query_scalar("SELECT balance FROM accounts WHERE account_id = $1")
-        .bind(loan.account_id)
-        .fetch_one(&mut *tx)
-        .await?;
+    let loan_account_balance: Decimal =
+        sqlx::query_scalar("SELECT balance FROM accounts WHERE account_id = $1")
+            .bind(loan.account_id)
+            .fetch_one(&mut *tx)
+            .await?;
 
     let remaining_debt = -loan_account_balance;
     if remaining_debt <= Decimal::ZERO {
@@ -478,8 +505,10 @@ async fn repay_loan(
             .await?;
 
         tracing::info!(loan_id = %loan.loan_id, "🎉 loan fully repaid and closed");
-    } else {
-        // Advance next payment date by 1 month
+    } else if amount_to_pay >= loan.monthly_payment {
+        // Only advance the due date when the payment meets the scheduled
+        // installment; an underpayment leaves next_payment_date as-is so the
+        // loan doesn't silently read as current.
         sqlx::query("UPDATE loans SET next_payment_date = next_payment_date + INTERVAL '1 month', updated_at = CURRENT_TIMESTAMP WHERE loan_id = $1")
             .bind(loan.loan_id)
             .execute(&mut *tx)
@@ -548,6 +577,22 @@ async fn admin_accrue_interest(
             .await
             .map_err(AppError::Database)?;
 
+        // Idempotent per loan per day: claim today's accrual before posting
+        // anything, so a retried cron tick or an overlapping run charges
+        // interest at most once per calendar day per loan.
+        let claimed = sqlx::query(
+            "UPDATE loans SET last_interest_accrual_date = CURRENT_DATE, updated_at = CURRENT_TIMESTAMP \
+             WHERE loan_id = $1 AND (last_interest_accrual_date IS NULL OR last_interest_accrual_date < CURRENT_DATE)",
+        )
+        .bind(loan.loan_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(AppError::Database)?;
+
+        if claimed.rows_affected() == 0 {
+            continue;
+        }
+
         let balance: Decimal =
             sqlx::query_scalar("SELECT balance FROM accounts WHERE account_id = $1")
                 .bind(loan.account_id)
@@ -580,6 +625,13 @@ async fn admin_accrue_interest(
             json!({ "loan_id": loan.loan_id }),
         )
         .await?;
+
+        // Transiently zero available balance before debit to avoid the logical
+        // constraint violation described in disburse_loan: available_balance
+        // otherwise still holds the pre-accrual balance+overdraft snapshot,
+        // which the trigger's balance-only update leaves stale and too high
+        // once the debit lands.
+        set_available_zero(&mut tx, loan.account_id).await?;
 
         // Post the local double-entry: debit Loan (-balance decreases further), credit Cash (+balance)
         post_two_legged(
@@ -623,4 +675,3 @@ async fn admin_accrue_interest(
 
     Ok(StatusCode::OK)
 }
-
