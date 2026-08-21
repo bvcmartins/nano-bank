@@ -149,8 +149,10 @@ async fn test_loan_lifecycle() {
     assert_eq!(as_num(&loan_bal["balance"]), -10000.00);
 
     // 10. Trigger admin daily interest accrual
+    let svc_token = service_token(&c).await;
     let accrue_resp = c
         .post(format!("{}/api/v1/loans/admin/accrue", base_url()))
+        .bearer_auth(&svc_token)
         .send()
         .await
         .unwrap();

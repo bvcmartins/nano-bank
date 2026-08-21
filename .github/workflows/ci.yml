@@ -44,15 +44,7 @@ jobs:
         env:
           PGPASSWORD: secure_nano_password_2024!
         run: |
-          for file in src/core/tables/00_init.sql \
-                      src/core/tables/01_enums.sql \
-                      src/core/tables/02_customers.sql \
-                      src/core/tables/03_accounts.sql \
-                      src/core/tables/04_transactions.sql \
-                      src/core/tables/05_security.sql \
-                      src/core/tables/06_triggers.sql \
-                      src/core/tables/07_rails.sql \
-                      src/core/tables/08_interac.sql; do
+          for file in $(ls src/core/tables/*.sql | sort); do
             echo "Applying $file..."
             psql -h 127.0.0.1 -U nanobank_user -d nano_bank_db -f "$file"
           done

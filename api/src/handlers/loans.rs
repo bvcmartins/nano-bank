@@ -10,10 +10,11 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::errors::AppError;
-use crate::handlers::cards::{post_gl_entry, post_two_legged, Tx};
+use crate::handlers::cards::{post_gl_entry, post_two_legged, reference_number, Tx};
+use crate::handlers::transactions::{ensure_external_cash_account, insert_transaction, recompute_available, set_available_zero, lock_accounts_cash_last};
 use crate::handlers::AppState;
 use crate::ledger::Account as GlAccount;
-use crate::middleware::auth::AuthenticatedCustomer;
+use crate::middleware::auth::{AuthenticatedCustomer, AuthenticatedService};
 use crate::models::loan::{ApplyLoanRequest, Loan, LoanResponse, LoanSummary, RepayLoanRequest};
 
 pub fn loan_routes() -> Router<AppState> {
@@ -247,6 +248,9 @@ async fn disburse_loan(
     )
     .await?;
 
+    // Transiently zero available balance before debit to avoid logical constraint violation
+    set_available_zero(&mut tx, loan.account_id).await?;
+
     // Post the local double-entry: debit Loan (-balance), credit Chequing (+balance)
     post_two_legged(
         &mut tx,
@@ -263,13 +267,17 @@ async fn disburse_loan(
     recompute_available(&mut tx, loan.account_id).await?;
     recompute_available(&mut tx, dest_account_id).await?;
 
-    // Activate the loan and its account
-    sqlx::query(
-        "UPDATE loans SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE loan_id = $1",
+    // Activate the loan and its account, protecting against concurrent disbursement
+    let result = sqlx::query(
+        "UPDATE loans SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE loan_id = $1 AND status = 'pending_disbursement'",
     )
     .bind(loan.loan_id)
     .execute(&mut *tx)
     .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::Conflict("Loan is no longer pending disbursement".to_string()));
+    }
 
     sqlx::query("UPDATE accounts SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE account_id = $1")
         .bind(loan.account_id)
@@ -378,26 +386,6 @@ async fn repay_loan(
             "Funding account is not active".to_string(),
         ));
     }
-    if funding.available_balance < amount {
-        return Err(AppError::InsufficientFunds);
-    }
-
-    // Determine remaining debt on the loan account
-    let loan_account_balance: Decimal =
-        sqlx::query_scalar("SELECT balance FROM accounts WHERE account_id = $1")
-            .bind(loan.account_id)
-            .fetch_one(&state.pool)
-            .await
-            .map_err(AppError::Database)?;
-
-    let remaining_debt = -loan_account_balance;
-    if remaining_debt <= Decimal::ZERO {
-        return Err(AppError::BadRequest(
-            "Loan is already fully repaid".to_string(),
-        ));
-    }
-
-    let amount_to_pay = amount.min(remaining_debt);
 
     let mut tx = state.pool.begin().await?;
 
@@ -411,6 +399,30 @@ async fn repay_loan(
             .execute(&mut *tx)
             .await?;
     }
+
+    // Determine remaining debt and funding balance AFTER locks are acquired
+    let funding_avail_balance: Decimal = sqlx::query_scalar("SELECT available_balance FROM accounts WHERE account_id = $1")
+        .bind(funding.account_id)
+        .fetch_one(&mut *tx)
+        .await?;
+
+    if funding_avail_balance < amount {
+        return Err(AppError::InsufficientFunds);
+    }
+
+    let loan_account_balance: Decimal = sqlx::query_scalar("SELECT balance FROM accounts WHERE account_id = $1")
+        .bind(loan.account_id)
+        .fetch_one(&mut *tx)
+        .await?;
+
+    let remaining_debt = -loan_account_balance;
+    if remaining_debt <= Decimal::ZERO {
+        return Err(AppError::BadRequest(
+            "Loan is already fully repaid".to_string(),
+        ));
+    }
+
+    let amount_to_pay = amount.min(remaining_debt);
 
     let reference = reference_number("PAY");
     let txn_id = insert_transaction(
@@ -511,7 +523,10 @@ async fn repay_loan(
     Ok(Json(updated_loan.into()))
 }
 
-async fn admin_accrue_interest(State(state): State<AppState>) -> Result<StatusCode, AppError> {
+async fn admin_accrue_interest(
+    State(state): State<AppState>,
+    _svc: AuthenticatedService,
+) -> Result<StatusCode, AppError> {
     let active_loans = sqlx::query_as::<_, Loan>(
         "SELECT loan_id, customer_id, account_id, principal_amount, interest_rate, \
          amortization_months, monthly_payment, status, next_payment_date, created_at, updated_at \
@@ -526,10 +541,17 @@ async fn admin_accrue_interest(State(state): State<AppState>) -> Result<StatusCo
         .map_err(AppError::Database)?;
 
     for loan in active_loans {
+        let mut tx = state.pool.begin().await?;
+
+        // Lock accounts cash-last to prevent deadlocks with other rails
+        lock_accounts_cash_last(&mut tx, &[loan.account_id], cash_id)
+            .await
+            .map_err(AppError::Database)?;
+
         let balance: Decimal =
             sqlx::query_scalar("SELECT balance FROM accounts WHERE account_id = $1")
                 .bind(loan.account_id)
-                .fetch_one(&state.pool)
+                .fetch_one(&mut *tx)
                 .await
                 .map_err(AppError::Database)?;
 
@@ -544,19 +566,6 @@ async fn admin_accrue_interest(State(state): State<AppState>) -> Result<StatusCo
 
         if interest <= Decimal::ZERO {
             continue;
-        }
-
-        let mut tx = state.pool.begin().await?;
-
-        // Lock accounts in id-sorted order to prevent deadlocks
-        let mut ids = vec![loan.account_id, cash_id];
-        ids.sort();
-
-        for account_id in ids {
-            sqlx::query("SELECT 1 FROM accounts WHERE account_id = $1 FOR UPDATE")
-                .bind(account_id)
-                .execute(&mut *tx)
-                .await?;
         }
 
         let reference = reference_number("INT");
@@ -615,111 +624,3 @@ async fn admin_accrue_interest(State(state): State<AppState>) -> Result<StatusCo
     Ok(StatusCode::OK)
 }
 
-// ---------------------------------------------------------------------------
-// Low-level DB helpers
-// ---------------------------------------------------------------------------
-
-async fn ensure_external_cash_account(
-    pool: &crate::config::database::DatabasePool,
-) -> Result<Uuid, sqlx::Error> {
-    sqlx::query(
-        r#"
-        INSERT INTO customers (email, phone_number, first_name, last_name, date_of_birth, sin)
-        VALUES ($1, 'nano-external-cash', 'Nano', 'Cash', '1970-01-01', NULL)
-        ON CONFLICT (email) DO NOTHING
-        "#,
-    )
-    .bind(CASH_CUSTOMER_EMAIL)
-    .execute(pool)
-    .await?;
-
-    let cash_customer_id: Uuid =
-        sqlx::query_scalar("SELECT customer_id FROM customers WHERE email = $1")
-            .bind(CASH_CUSTOMER_EMAIL)
-            .fetch_one(pool)
-            .await?;
-
-    sqlx::query(
-        r#"
-        INSERT INTO accounts
-            (customer_id, account_number, account_type, status, overdraft_limit, activated_at)
-        SELECT $1, '000000000000', $2::account_type, 'active', 1000000000000, CURRENT_TIMESTAMP
-        WHERE NOT EXISTS (
-            SELECT 1 FROM accounts WHERE customer_id = $1 AND account_type = $2::account_type
-        )
-        "#,
-    )
-    .bind(cash_customer_id)
-    .bind(CASH_ACCOUNT_TYPE)
-    .execute(pool)
-    .await?;
-
-    sqlx::query_scalar(
-        "SELECT account_id FROM accounts WHERE customer_id = $1 AND account_type = $2::account_type \
-         ORDER BY created_at LIMIT 1",
-    )
-    .bind(cash_customer_id)
-    .bind(CASH_ACCOUNT_TYPE)
-    .fetch_one(pool)
-    .await
-}
-
-fn reference_number(prefix: &str) -> String {
-    let n = (Uuid::new_v4().as_u128() % 1_000_000_000_000) as u64;
-    format!("{}{:012}", prefix, n)
-}
-
-async fn insert_transaction(
-    tx: &mut Tx<'_>,
-    reference: &str,
-    transaction_type: &str,
-    amount: Decimal,
-    description: &str,
-    initiated_by: Uuid,
-    external_reference: Option<&str>,
-    metadata: serde_json::Value,
-) -> Result<Uuid, sqlx::Error> {
-    sqlx::query_scalar(
-        r#"
-        INSERT INTO transactions
-            (reference_number, transaction_type, amount, description, status,
-             initiated_by, external_reference, completed_at, metadata)
-        VALUES ($1, $2, $3, $4, 'completed', $5, $6, CURRENT_TIMESTAMP, $7)
-        RETURNING transaction_id
-        "#,
-    )
-    .bind(reference)
-    .bind(transaction_type)
-    .bind(amount)
-    .bind(description)
-    .bind(initiated_by)
-    .bind(external_reference)
-    .bind(metadata)
-    .fetch_one(&mut **tx)
-    .await
-}
-
-async fn set_available_zero(tx: &mut Tx<'_>, account_id: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE accounts SET available_balance = 0 WHERE account_id = $1")
-        .bind(account_id)
-        .execute(&mut **tx)
-        .await?;
-    Ok(())
-}
-
-async fn recompute_available(tx: &mut Tx<'_>, account_id: Uuid) -> Result<Decimal, sqlx::Error> {
-    sqlx::query_scalar(
-        r#"
-        UPDATE accounts
-        SET available_balance = balance + overdraft_limit
-            - COALESCE((SELECT sum(amount) FROM account_holds
-                        WHERE account_id = $1 AND released_at IS NULL), 0),
-            updated_at = CURRENT_TIMESTAMP
-        WHERE account_id = $1
-        RETURNING available_balance
-        "#,
-    )
-    .bind(account_id)
-    .fetch_one(&mut **tx)
-    .await
-}

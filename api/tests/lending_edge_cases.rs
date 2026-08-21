@@ -465,8 +465,10 @@ async fn test_interest_accrual_only_on_active_loans() {
     let loan_account_id = Uuid::parse_str(loan_res["account_id"].as_str().unwrap()).unwrap();
 
     // Trigger interest accrual
+    let svc_token = service_token(&c).await;
     let accrue_resp = c
         .post(format!("{}/api/v1/loans/admin/accrue", base_url()))
+        .bearer_auth(&svc_token)
         .send()
         .await
         .unwrap();
@@ -506,6 +508,7 @@ async fn test_interest_accrual_only_on_active_loans() {
     // Trigger interest accrual again -> should accrue interest now (10,000 * 0.10 / 365 = 2.7397 -> rounds to 2.74)
     let accrue_resp = c
         .post(format!("{}/api/v1/loans/admin/accrue", base_url()))
+        .bearer_auth(&svc_token)
         .send()
         .await
         .unwrap();

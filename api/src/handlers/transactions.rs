@@ -61,9 +61,9 @@ use crate::models::transaction::{
     TransactionResponse, WithdrawalRequest,
 };
 
-const CASH_CUSTOMER_EMAIL: &str = "cash@nano.bank";
+pub(crate) const CASH_CUSTOMER_EMAIL: &str = "cash@nano.bank";
 /// The external-cash counterparty is a chequing account under the cash customer.
-const CASH_ACCOUNT_TYPE: &str = "chequing";
+pub(crate) const CASH_ACCOUNT_TYPE: &str = "chequing";
 
 const DEFAULT_HISTORY_LIMIT: u32 = 50;
 
@@ -84,7 +84,7 @@ pub fn transaction_routes() -> Router<AppState> {
 /// Ensure the synthetic cash customer and its `EXTERNAL_CASH` account exist and
 /// return the account id. Idempotent; re-resolved per request so a data wipe
 /// self-heals (mirrors `cards::ensure_system_accounts`).
-async fn ensure_external_cash_account(pool: &DatabasePool) -> Result<Uuid, sqlx::Error> {
+pub(crate) async fn ensure_external_cash_account(pool: &DatabasePool) -> Result<Uuid, sqlx::Error> {
     // email is the stable identity (ON CONFLICT). The other UNIQUE columns are
     // chosen so they can't collide with real customers: a non-numeric phone
     // sentinel (the column has no format constraint) and a NULL sin (nullable).
@@ -1173,7 +1173,7 @@ fn push_filters(
 
 /// Reject credit-card accounts (they use the card rails) and non-active status.
 fn ensure_operable(account: &Account) -> Result<(), AppError> {
-    if matches!(account.account_type, AccountType::CreditCard) {
+    if matches!(account.account_type, AccountType::CreditCard | AccountType::Loan) {
         return Err(AppError::BadRequest(
             "credit card accounts use the card endpoints".to_string(),
         ));
@@ -1196,7 +1196,7 @@ fn ensure_operable(account: &Account) -> Result<(), AppError> {
 /// `ids` is deduped; `cash_id` is locked last, and only if it appeared in `ids`.
 /// Returns the rows found, keyed by account id — a caller turns a missing key
 /// into its own error (404 etc.).
-async fn lock_accounts_cash_last(
+pub(crate) async fn lock_accounts_cash_last(
     tx: &mut Tx<'_>,
     ids: &[Uuid],
     cash_id: Uuid,
@@ -1279,7 +1279,7 @@ async fn post_movement(
 
 // Groups the `transactions` INSERT columns; the arg count mirrors the row.
 #[allow(clippy::too_many_arguments)]
-async fn insert_transaction(
+pub(crate) async fn insert_transaction(
     tx: &mut Tx<'_>,
     reference: &str,
     transaction_type: &str,
@@ -1339,7 +1339,7 @@ async fn account_balance(tx: &mut Tx<'_>, account_id: Uuid) -> Result<Decimal, s
 /// first is always safe (the post-debit balance stays ≥ 0 because we verified
 /// `available_balance >= amount`); [`recompute_available`] restores the correct
 /// value afterward. Credited accounts never need this (their balance only rises).
-async fn set_available_zero(tx: &mut Tx<'_>, account_id: Uuid) -> Result<(), sqlx::Error> {
+pub(crate) async fn set_available_zero(tx: &mut Tx<'_>, account_id: Uuid) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE accounts SET available_balance = 0 WHERE account_id = $1")
         .bind(account_id)
         .execute(&mut **tx)
@@ -1349,7 +1349,7 @@ async fn set_available_zero(tx: &mut Tx<'_>, account_id: Uuid) -> Result<(), sql
 
 /// Recompute a deposit account's available balance: `balance + overdraft − open holds`.
 /// (Deposit accounts have a 0 overdraft; the term keeps the formula general.)
-async fn recompute_available(tx: &mut Tx<'_>, account_id: Uuid) -> Result<Decimal, sqlx::Error> {
+pub(crate) async fn recompute_available(tx: &mut Tx<'_>, account_id: Uuid) -> Result<Decimal, sqlx::Error> {
     sqlx::query_scalar(
         r#"
         UPDATE accounts

@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-project_path=$(cd "$(dirname "$0")/.." && pwd)
+project_path=$(dirname "$0")
 cd "$project_path"
 
 echo "🏦 Starting Nano Bank in Dev Mode..."
@@ -29,7 +29,7 @@ else
     fi
 fi
 
-# Step 2: Ensure Port 5432 is accessible
+# Step 2: Ensure Port Forwarding is Active
 echo "📡 Checking if database port 5432 is already listening..."
 if nc -z localhost 5432 2>/dev/null; then
     echo "✅ Port 5432 is already active."

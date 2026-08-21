@@ -162,3 +162,21 @@ macro_rules! require_stack {
         }
     };
 }
+
+pub const SERVICE_SECRET: &str = "nano-bank-visa-network-secret-change-me";
+
+pub async fn service_token(c: &reqwest::Client) -> String {
+    let resp = c
+        .post(format!("{}/api/v1/auth/service-token", base_url()))
+        .json(&serde_json::json!({ "client_secret": SERVICE_SECRET }))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_success(),
+        "service-token: {}",
+        resp.status()
+    );
+    let v: serde_json::Value = resp.json().await.unwrap();
+    v["access_token"].as_str().unwrap().to_string()
+}

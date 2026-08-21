@@ -21,7 +21,7 @@ const PASSWORD = "password123";
 async function verifyKycInDb(email: string) {
   const connectionString =
     process.env.DATABASE_URL ||
-    "postgres://nanobank_user:secure_nano_password_2024!@localhost:55432/nano_bank_db";
+    "postgres://nanobank_user:secure_nano_password_2024!@localhost:5432/nano_bank_db";
 
   const client = new Client({ connectionString });
   try {
