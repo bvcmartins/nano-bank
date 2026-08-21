@@ -9,6 +9,7 @@ export default defineConfig({
   use: {
     baseURL: process.env.UI_BASE_URL ?? "http://localhost:3000",
     trace: "on-first-retry",
+    video: 'on'
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
 });

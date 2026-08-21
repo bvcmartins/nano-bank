@@ -5,7 +5,7 @@ import "server-only";
 export interface Account {
   account_id: string;
   account_number: string;
-  account_type: "chequing" | "savings" | "credit_card";
+  account_type: "chequing" | "savings" | "credit_card" | "loan";
   status: "active" | "frozen" | "closed" | "pending_activation";
   balance: string;
   available_balance: string;

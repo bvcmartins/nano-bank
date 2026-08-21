@@ -2,9 +2,10 @@ import TokenCountdown from "@/components/TokenCountdown";
 import { decodeJwtExpiry } from "@/lib/jwt";
 import { requireSession } from "@/lib/session";
 import { Metadata } from 'next';
-import { CreditCard, PiggyBank, AlertCircle } from "lucide-react";
+import { CreditCard, PiggyBank, AlertCircle, Landmark } from "lucide-react";
 import { API_BASE_URL } from "@/lib/config";
 import { Account } from "@/lib/accounts";
+import { LoanSummary } from "@/lib/loans";
 import GlassCard from "@/components/GlassCard";
 import GradientHeading from "@/components/GradientHeading";
 import Link from "next/link";
@@ -17,22 +18,31 @@ export default async function Page() {
     const { accessToken, profile } = await requireSession();
     const tokenExpiry = decodeJwtExpiry(accessToken);
 
-    // Fetch accounts
+    // Fetch accounts and loans in parallel
     let accounts: Account[] = [];
+    let loans: LoanSummary[] = [];
     let fetchError = false;
     try {
-        const response = await fetch(`${API_BASE_URL}/api/v1/accounts`, {
-            headers: { Authorization: `Bearer ${accessToken}` },
-            cache: "no-store",
-        });
-        if (response.ok) {
-            accounts = await response.json();
+        const [accRes, loansRes] = await Promise.all([
+            fetch(`${API_BASE_URL}/api/v1/accounts`, {
+                headers: { Authorization: `Bearer ${accessToken}` },
+                cache: "no-store",
+            }),
+            fetch(`${API_BASE_URL}/api/v1/loans`, {
+                headers: { Authorization: `Bearer ${accessToken}` },
+                cache: "no-store",
+            })
+        ]);
+
+        if (accRes.ok && loansRes.ok) {
+            accounts = await accRes.json();
+            loans = await loansRes.json();
         } else {
-            console.error(`Failed to fetch accounts: ${response.status}`);
+            console.error(`Failed to fetch dashboard data. Accounts: ${accRes.status}, Loans: ${loansRes.status}`);
             fetchError = true;
         }
     } catch (error) {
-        console.error("Failed to fetch accounts:", error);
+        console.error("Failed to fetch dashboard metrics:", error);
         fetchError = true;
     }
 
@@ -50,6 +60,14 @@ export default async function Page() {
     );
     const totalUsedBalance = creditCardAccounts.reduce(
         (sum, a) => sum + parseFloat(a.balance || "0"),
+        0
+    );
+
+    const loanAccounts = accounts.filter(
+        (a) => a.account_type === "loan"
+    );
+    const totalLoanDebt = loanAccounts.reduce(
+        (sum, a) => sum - parseFloat(a.balance || "0"),
         0
     );
 
@@ -89,7 +107,7 @@ export default async function Page() {
                         </div>
                     </div>
                 ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                         {/* Deposit Cash Column */}
                         <Link 
                             href="/dashboard/accounts"
@@ -135,6 +153,30 @@ export default async function Page() {
                             <div className="text-[11px] text-slate-400 border-t border-white/5 pt-3 flex justify-between items-center">
                                 <span>{creditCardAccounts.length} Credit {creditCardAccounts.length === 1 ? 'card' : 'cards'}</span>
                                 <span className="text-nanobank-orange-deep font-medium group-hover:underline text-[10px]">Details &rarr;</span>
+                            </div>
+                        </Link>
+
+                        {/* Loans Column */}
+                        <Link 
+                            href="/dashboard/loans"
+                            className="flex flex-col justify-between p-6 rounded-xl border border-white/5 bg-slate-900/40 hover:border-violet-500/30 transition-all duration-300 group cursor-pointer hover:scale-[1.02] transform"
+                        >
+                            <div className="flex justify-between items-start mb-4">
+                                <div>
+                                    <span className="text-slate-400 text-xs font-semibold uppercase tracking-wider">
+                                        Total Loan Debt
+                                    </span>
+                                    <h3 className="text-2xl font-extrabold text-white mt-1">
+                                        {formatCurrency(totalLoanDebt)}
+                                    </h3>
+                                </div>
+                                <div className="p-2 rounded-lg bg-violet-500/10 text-violet-400 group-hover:scale-110 transition-transform">
+                                    <Landmark className="w-5 h-5" />
+                                </div>
+                            </div>
+                            <div className="text-[11px] text-slate-400 border-t border-white/5 pt-3 flex justify-between items-center">
+                                <span>{loans.length} Active {loans.length === 1 ? 'loan' : 'loans'}</span>
+                                <span className="text-violet-400 font-medium group-hover:underline text-[10px]">Details &rarr;</span>
                             </div>
                         </Link>
                     </div>

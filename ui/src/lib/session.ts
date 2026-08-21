@@ -60,13 +60,13 @@ export async function requireSession(): Promise<Session> {
   const accessToken = cookieStore.get("access_token")?.value;
   const verification = await verifySession(accessToken);
 
+  if (verification.status === "valid") {
+    return { accessToken: accessToken!, profile: verification.profile };
+  }
+
   if (verification.status === "error") {
     throw new Error("Unable to verify session: the API is unreachable or returned an error.");
   }
 
-  if (verification.status === "unauthorized") {
-    redirect("/api/auth/refresh?next=/dashboard");
-  }
-
-  return { accessToken: accessToken!, profile: verification.profile };
+  redirect("/api/auth/refresh?next=/dashboard");
 }
