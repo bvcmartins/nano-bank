@@ -243,7 +243,10 @@ async fn test_insufficient_funds_on_repayment() {
     .await;
     assert_eq!(repay_resp.status(), reqwest::StatusCode::BAD_REQUEST);
     let err_val: Value = repay_resp.json().await.unwrap();
-    assert_eq!(err_val["error"]["code"].as_str().unwrap(), "INSUFFICIENT_FUNDS");
+    assert_eq!(
+        err_val["error"]["code"].as_str().unwrap(),
+        "INSUFFICIENT_FUNDS"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -409,7 +412,10 @@ async fn test_invalid_loan_application_parameters() {
     assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
     let err_val: Value = resp.json().await.unwrap();
     assert!(
-        err_val["error"]["message"].as_str().unwrap().contains("positive"),
+        err_val["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("positive"),
         "error should state principal must be positive"
     );
 
@@ -450,7 +456,10 @@ async fn test_invalid_loan_application_parameters() {
     assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
     let err_val: Value = resp.json().await.unwrap();
     assert!(
-        err_val["error"]["message"].as_str().unwrap().contains("positive"),
+        err_val["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("positive"),
         "error should state amortization months must be positive"
     );
 }

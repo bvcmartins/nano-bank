@@ -42,7 +42,10 @@ async fn test_loan_lifecycle() {
     assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
     let err_val: Value = resp.json().await.unwrap();
     assert!(
-        err_val["error"]["message"].as_str().unwrap().contains("KYC"),
+        err_val["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("KYC"),
         "error should indicate KYC requirement"
     );
 
