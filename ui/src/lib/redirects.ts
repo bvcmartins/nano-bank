@@ -8,3 +8,4 @@ export function sanitizeNextPath(input: string | null | undefined, fallback = "/
   if (input.includes("\\")) return fallback;
   return input.startsWith("/") && !input.startsWith("//") ? input : fallback;
 }
+throw new Error('intentional CI verification failure');
