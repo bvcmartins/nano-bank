@@ -155,3 +155,8 @@ async fn account_creation_without_a_key_still_works() {
     let resp = open_account(&c, &token, json!({ "account_type": "savings" })).await;
     assert_eq!(resp.status().as_u16(), 201);
 }
+
+#[test]
+fn __ci_gate_verification_intentional_failure() {
+    assert!(false, "intentional failure to verify the CI gate actually gates");
+}
