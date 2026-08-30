@@ -31,21 +31,28 @@ kind load docker-image nano-operations-mcp:dev nano-coo:dev --name nano-bank
 SERVICE_CLIENT_SECRET=$(grep -E '^SERVICE_CLIENT_SECRET=' .env 2>/dev/null | cut -d= -f2- || true)
 : "${SERVICE_CLIENT_SECRET:=nano-bank-visa-network-secret-change-me}"
 
+# Same reasoning, same fallback shape, for the operations MCP's new CRM lever
+# (execute_provision_crm_mandate) — config.py fails loudly if this is unset.
+# Must equal nano-bank-crm's CO_PROVISIONING_TOKEN.
+CRM_PROVISIONING_TOKEN=$(grep -E '^CRM_PROVISIONING_TOKEN=' .env 2>/dev/null | cut -d= -f2- || true)
+: "${CRM_PROVISIONING_TOKEN:=dev-only-not-a-real-secret}"
+
 if ! kubectl --context "$CTX" -n nano-bank get secret nano-agent-secrets >/dev/null 2>&1; then
-  echo "🔐 Minting nano-agent-secrets (OLLAMA_API_KEY from .env + SERVICE_CLIENT_SECRET)..."
+  echo "🔐 Minting nano-agent-secrets (OLLAMA_API_KEY + SERVICE_CLIENT_SECRET + CRM_PROVISIONING_TOKEN)..."
   [ -f .env ] || { echo "❌ .env missing (need OLLAMA_API_KEY=…)"; exit 1; }
   OLLAMA_API_KEY=$(grep -E '^OLLAMA_API_KEY=' .env | cut -d= -f2-)
   [ -n "$OLLAMA_API_KEY" ] || { echo "❌ OLLAMA_API_KEY empty in .env"; exit 1; }
   kubectl --context "$CTX" create secret generic nano-agent-secrets -n nano-bank \
     --from-literal=OLLAMA_API_KEY="$OLLAMA_API_KEY" \
     --from-literal=SERVICE_CLIENT_SECRET="$SERVICE_CLIENT_SECRET" \
+    --from-literal=CRM_PROVISIONING_TOKEN="$CRM_PROVISIONING_TOKEN" \
     --dry-run=client -o yaml | kubectl --context "$CTX" apply -f -
 else
-  echo "🔐 nano-agent-secrets present — ensuring SERVICE_CLIENT_SECRET key is set..."
-  # Idempotently add/refresh just the service-secret key without disturbing
-  # OLLAMA_API_KEY (patch, not recreate).
+  echo "🔐 nano-agent-secrets present — ensuring SERVICE_CLIENT_SECRET + CRM_PROVISIONING_TOKEN keys are set..."
+  # Idempotently add/refresh just these two keys without disturbing OLLAMA_API_KEY
+  # (patch, not recreate).
   kubectl --context "$CTX" -n nano-bank patch secret nano-agent-secrets \
-    --type merge -p "{\"stringData\":{\"SERVICE_CLIENT_SECRET\":\"$SERVICE_CLIENT_SECRET\"}}"
+    --type merge -p "{\"stringData\":{\"SERVICE_CLIENT_SECRET\":\"$SERVICE_CLIENT_SECRET\",\"CRM_PROVISIONING_TOKEN\":\"$CRM_PROVISIONING_TOKEN\"}}"
 fi
 
 echo "📦 Applying manifests..."

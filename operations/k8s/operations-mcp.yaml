@@ -24,6 +24,18 @@ spec:
           valueFrom:
             secretKeyRef: { name: nano-agent-secrets, key: SERVICE_CLIENT_SECRET }
         - { name: MCP_PORT,             value: "8092" }
+        # nano-bank-crm is not (yet) deployed inside this cluster — it runs as a
+        # separate host-level Next.js process. host.docker.internal reaches the
+        # kind node's host from inside the cluster; adjust if nano-bank-crm ever
+        # gets its own in-cluster deployment (then point this at its Service DNS
+        # name, the same way NANO_BANK_API above points at bank-api).
+        - { name: CRM_BASE_URL,         value: http://host.docker.internal:3000 }
+        - { name: CRM_TENANT_SLUG,      value: acme }
+        # Must match nano-bank-crm's CO_PROVISIONING_TOKEN — minted by
+        # coo/k8s/deploy.sh into nano-agent-secrets, same as SERVICE_CLIENT_SECRET.
+        - name: CRM_PROVISIONING_TOKEN
+          valueFrom:
+            secretKeyRef: { name: nano-agent-secrets, key: CRM_PROVISIONING_TOKEN }
 ---
 apiVersion: v1
 kind: Service
