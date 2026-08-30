@@ -21,6 +21,12 @@ class Settings:
     mcp_url: str
     branch_port: int
     console_port: int
+    crm_base_url: str
+    crm_tenant_slug: str
+    crm_agent_id: str
+    crm_agent_secret: str
+    crm_lookup_token: str
+    coo_base_url: str
 
     @classmethod
     def from_env(cls, env: Optional[Mapping[str, str]] = None) -> "Settings":
@@ -50,4 +56,10 @@ class Settings:
             mcp_url=g("MCP_URL", "http://localhost:8087/mcp"),
             branch_port=int(g("BRANCH_PORT", "8086")),
             console_port=int(g("CONSOLE_PORT", "8505")),
+            crm_base_url=g("CRM_BASE_URL", "http://localhost:3000"),
+            crm_tenant_slug=g("CRM_TENANT_SLUG", "acme"),
+            crm_agent_id=g("CRM_AGENT_ID"),
+            crm_agent_secret=g("CRM_AGENT_SECRET"),
+            crm_lookup_token=g("CRM_LOOKUP_TOKEN"),
+            coo_base_url=g("COO_BASE_URL", "http://localhost:8093"),
         )
