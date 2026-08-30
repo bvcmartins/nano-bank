@@ -8,7 +8,10 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from .config import Settings
 from . import model_factory as mf
+from .crm import CRM_LLM_TOOL_NAMES
 from .mcp_server import LLM_TOOL_NAMES
+
+ALL_ALLOWED_TOOL_NAMES = LLM_TOOL_NAMES | CRM_LLM_TOOL_NAMES
 
 MANAGER_PROMPT = (
     "You are a careful personal banking manager for ONE client. Answer only from the "
@@ -21,19 +24,31 @@ MANAGER_PROMPT = (
 
 
 def agent_tools(all_tools):
-    return [t for t in all_tools if getattr(t, "name", None) in LLM_TOOL_NAMES]
+    return [t for t in all_tools if getattr(t, "name", None) in ALL_ALLOWED_TOOL_NAMES]
 
 
-def _mcp_session(settings: Settings, customer_id: str, token: Optional[str]):
-    """Per-request MCP client bound to a customer via trusted headers."""
+def _mcp_session(settings: Settings, customer_id: str, token: Optional[str],
+                 crm_token: Optional[str] = None):
+    """Per-request MCP client bound to a customer via trusted headers. The CRM
+    server is included only when a CRM token is actually available — a
+    customer with no CRM access yet (or CRM_BASE_URL left unconfigured, per
+    Settings.from_env's fail-soft default there) simply gets no CRM tools this
+    turn, same shape as nano's own optional X-Nano-Token."""
     from langchain_mcp_adapters.client import MultiServerMCPClient
-    return MultiServerMCPClient({
+    servers = {
         "nano": {
             "url": settings.mcp_url,
             "transport": "streamable_http",
             "headers": {"X-Nano-Customer": customer_id, **({"X-Nano-Token": token} if token else {})},
         }
-    })
+    }
+    if crm_token:
+        servers["crm"] = {
+            "url": settings.crm_base_url.rstrip("/") + "/api/agent/mcp",
+            "transport": "streamable_http",
+            "headers": {"authorization": f"Bearer {crm_token}"},
+        }
+    return MultiServerMCPClient(servers)
 
 
 async def assist(settings: Settings, customer_id: str, token: Optional[str],
