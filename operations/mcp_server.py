@@ -9,6 +9,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from .config import Settings
 from .bank_client import BankClient
+from .crm_client import CrmClient
 from . import metrics
 
 
@@ -22,7 +23,7 @@ def _stringify(obj):
     return obj
 
 
-def build_mcp(bank: BankClient) -> FastMCP:
+def build_mcp(bank: BankClient, crm: CrmClient) -> FastMCP:
     mcp = FastMCP(
         "nano-operations",
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
@@ -111,6 +112,20 @@ def build_mcp(bank: BankClient) -> FastMCP:
         return _stringify(bank.flush_notifications())
 
     @mcp.tool()
+    def execute_provision_crm_mandate(customer_id: str, contact_name: str) -> dict:
+        """Ensure the personal manager has CRM access for a bank customer:
+        creates (or reuses) a CRM contact and a mandate scoped to exactly that
+        customer's own records — never anyone else's. Idempotent: calling this
+        again for a customer who already has access returns the existing
+        mandate rather than creating a duplicate, so use it freely, including
+        as a safety check before assuming access exists. The personal manager
+        cannot request this itself — provisioning CRM access is your call, not
+        its own, so it asks you rather than acting on its own authority.
+        `contact_name` should be the customer's real name (from a customer
+        profile you already have), used only if no CRM contact exists yet."""
+        return _stringify(crm.ensure_mandate(customer_id, contact_name))
+
+    @mcp.tool()
     def operations_health(window: str = "24h") -> dict:
         """One-shot bundle: float, transactions, rails, exceptions and cards for a window."""
         return _stringify(
@@ -129,7 +144,7 @@ def build_mcp(bank: BankClient) -> FastMCP:
 
 def main():
     settings = Settings.from_env()
-    mcp = build_mcp(BankClient(settings))
+    mcp = build_mcp(BankClient(settings), CrmClient(settings))
     import uvicorn
 
     uvicorn.run(mcp.streamable_http_app(), host="0.0.0.0", port=settings.mcp_port)
