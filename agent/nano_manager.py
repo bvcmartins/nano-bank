@@ -52,9 +52,10 @@ def _mcp_session(settings: Settings, customer_id: str, token: Optional[str],
 
 
 async def assist(settings: Settings, customer_id: str, token: Optional[str],
-                 message: str, thread_id: Optional[str] = None) -> dict:
+                 message: str, thread_id: Optional[str] = None,
+                 crm_token: Optional[str] = None) -> dict:
     thread_id = thread_id or f"{customer_id}-{uuid.uuid4().hex[:6]}"
-    client = _mcp_session(settings, customer_id, token)
+    client = _mcp_session(settings, customer_id, token, crm_token)
     all_tools = await client.get_tools()
     tools = agent_tools(all_tools)
 
