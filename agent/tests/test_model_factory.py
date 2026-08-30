@@ -9,7 +9,7 @@ def _settings():
 
 def test_resolver_picks_primary_when_it_probes():
     s = _settings()
-    assert mf.resolve_model(s, probe=lambda model, st: model == "glm-5.2") == "glm-5.2"
+    assert mf.resolve_model(s, probe=lambda model, st: model == "glm-5.3") == "glm-5.3"
 
 
 def test_resolver_raises_when_primary_fails():

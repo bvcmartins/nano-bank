@@ -19,7 +19,7 @@ spec:
         - secretRef: { name: nano-agent-secrets }
         env:
         - { name: OLLAMA_BASE_URL,        value: https://ollama.com/v1 }
-        - { name: MANAGER_MODEL,          value: glm-5.2 }
+        - { name: MANAGER_MODEL,          value: glm-5.3 }
         - { name: MCP_URL,                value: http://agent-mcp:8087/mcp }
         - { name: NANO_BANK_API,          value: http://bank-api:8081 }
         - { name: BRANCH_PORT,            value: "8086" }
