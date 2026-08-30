@@ -10,6 +10,9 @@ class Settings:
     service_client_secret: str
     mcp_port: int
     timeout: float
+    crm_base_url: str
+    crm_tenant_slug: str
+    crm_provisioning_token: str
 
     @classmethod
     def from_env(cls, env: Optional[Mapping[str, str]] = None) -> "Settings":
@@ -25,9 +28,19 @@ class Settings:
                 "NANO_BANK__SECURITY__SERVICE_CLIENT_SECRET; refusing to fall "
                 "back to the well-known dev default."
             )
+        crm_token = e.get("CRM_PROVISIONING_TOKEN")
+        if not crm_token:
+            raise RuntimeError(
+                "CRM_PROVISIONING_TOKEN is not set. It must match nano-bank-crm's "
+                "CO_PROVISIONING_TOKEN; refusing to run the CRM-provisioning lever "
+                "without it."
+            )
         return cls(
             nano_bank_api=e.get("NANO_BANK_API", "http://localhost:8081"),
             service_client_secret=secret,
             mcp_port=int(e.get("MCP_PORT", "8092")),
             timeout=float(e.get("REQUEST_TIMEOUT", "10.0")),
+            crm_base_url=e.get("CRM_BASE_URL", "http://localhost:3000"),
+            crm_tenant_slug=e.get("CRM_TENANT_SLUG", "acme"),
+            crm_provisioning_token=crm_token,
         )
