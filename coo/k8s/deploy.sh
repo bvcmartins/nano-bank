@@ -33,9 +33,13 @@ SERVICE_CLIENT_SECRET=$(grep -E '^SERVICE_CLIENT_SECRET=' .env 2>/dev/null | cut
 
 # Same reasoning, same fallback shape, for the operations MCP's new CRM lever
 # (execute_provision_crm_mandate) — config.py fails loudly if this is unset.
-# Must equal nano-bank-crm's CO_PROVISIONING_TOKEN.
+# Must equal nano-bank-crm's CO_PROVISIONING_TOKEN. nano-bank-crm's own
+# .env.example gives CO_PROVISIONING_TOKEN and PERSONAL_MANAGER_LOOKUP_TOKEN
+# deliberately different placeholder values (their review found the original
+# shared placeholder meant dev/CI never exercised the credential split) — this
+# fallback must track theirs, not just be *a* value.
 CRM_PROVISIONING_TOKEN=$(grep -E '^CRM_PROVISIONING_TOKEN=' .env 2>/dev/null | cut -d= -f2- || true)
-: "${CRM_PROVISIONING_TOKEN:=dev-only-not-a-real-secret}"
+: "${CRM_PROVISIONING_TOKEN:=dev-only-not-a-real-secret-provision}"
 
 if ! kubectl --context "$CTX" -n nano-bank get secret nano-agent-secrets >/dev/null 2>&1; then
   echo "🔐 Minting nano-agent-secrets (OLLAMA_API_KEY + SERVICE_CLIENT_SECRET + CRM_PROVISIONING_TOKEN)..."
