@@ -53,8 +53,9 @@ def _last_ai_text(state) -> str:
 # demos/10-ceo/present/boardroom.template.html so a beat that fails this check
 # is also exactly the beat isJunk() would drop.
 _JUNK_RE = re.compile(
-    r"^\s*\(?\s*((the )?analysis (is |now )?complete|all steps? done|all done|"
-    r"end of (the )?review|end of (the )?report|no answer|report above)\b",
+    r"^\s*\(?\s*((the )?(analysis|plan) (is |now )?complete|"
+    r"all steps?( have been| were)? (done|executed|completed)( and recorded)?|"
+    r"all done|end of (the )?review|end of (the )?report|no answer|report above)\b",
     re.IGNORECASE)
 
 

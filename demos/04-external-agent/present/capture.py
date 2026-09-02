@@ -28,8 +28,8 @@ import requests
 from agent.external_agent.agent import ExternalAgent, GatewayHTTP
 
 DEFAULT_INSTRUCTION = (
-    "Pay my $50 Epcor utility bill and tell me what a loan would look like "
-    "if I want to buy a $28,000 car."
+    "Pay my $50 Epcor utility bill, then ask my personal manager to confirm the payment "
+    "went through and explain what a loan would look like if I want to buy a $28,000 car."
 )
 
 

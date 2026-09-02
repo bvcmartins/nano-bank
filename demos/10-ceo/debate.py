@@ -36,11 +36,15 @@ BEATS = [
         "shows": "the CEO opens the debate and frames the question, before anyone else speaks",
         "message": _TOPIC + "Table this motion to open the debate. Do NOT consult any "
                    "officer yet — that starts next turn. Right now just state the motion "
-                   "in your own words and name the order you will hear positions in: "
-                   "CXO (demand) -> CTO (capacity) -> CFO (cost) -> COO (operational "
-                   "load) -> your ruling. This is a framing statement, not a report — "
-                   "open the debate the way a chair actually would: confident and plain, "
-                   "in command of the room.",
+                   "in your own words — the actual pilot terms (the 500-customer cap, the "
+                   "$50/month cap, Interac-only) — and literally name the order you will "
+                   "hear positions in: CXO (demand) -> CTO (capacity) -> CFO (cost) -> COO "
+                   "(operational load) -> your ruling. This is a framing statement, not a "
+                   "report — open the debate the way a chair actually would: confident and "
+                   "plain, in command of the room. Do NOT describe your own process or "
+                   "planning ('the plan is set', 'call the witnesses') as a substitute for "
+                   "actually stating the motion and the order — a meta-comment about being "
+                   "ready is not an opening, the content itself is.",
         "thread": "debate",
     },
     {
@@ -52,8 +56,12 @@ BEATS = [
                    "(issues, NPS/CSAT, the feature-request theme)? Relay the CXO's "
                    "answer, attributing the figures. Require the CXO to open with an "
                    "explicit one-line vote — AYE (ship the pilot) or NAY (do not) — "
-                   "before the supporting detail; a wall of metrics with no stated "
-                   "position is not an answer to a motion.",
+                   "then make the actual CASE for it: 2-3 sentences of real argument, "
+                   "in plain language, for why that vote is right, BEFORE any "
+                   "supporting figures. Every figure that follows must be woven in as "
+                   "evidence for a point already made, not laid out as a freestanding "
+                   "report — a data dump with a vote label stapled on top is still not "
+                   "an answer to a motion.",
         "thread": "debate",
     },
     {
@@ -65,8 +73,12 @@ BEATS = [
                    "what is the reliability/capacity risk right now? Relay the CTO's "
                    "answer and say where it agrees or conflicts with the CXO's position. "
                    "Require the CTO to open with an explicit one-line vote — AYE or NAY "
-                   "— before the supporting detail; a wall of metrics with no stated "
-                   "position is not an answer to a motion. This is a consultation, not a "
+                   "— then make the actual CASE for it: 2-3 sentences of real argument, "
+                   "in plain language, for why that vote is right, BEFORE any supporting "
+                   "figures. Every figure that follows must be woven in as evidence for "
+                   "a point already made, not laid out as a freestanding report — a data "
+                   "dump with a vote label stapled on top is still not an answer to a "
+                   "motion. This is a consultation, not a "
                    "directive: the CTO is asked for its position ONLY, not to act on "
                    "anything or delegate any work.",
         "thread": "debate",
@@ -79,9 +91,13 @@ BEATS = [
                    "pilot (500 customers, $50/month cap) cost, and does the return (NIM / "
                    "RAROC / fee income) justify piloting it this quarter versus deferring? "
                    "Relay the CFO's answer, attributing every figure. Require the CFO to "
-                   "open with an explicit one-line vote — AYE or NAY — before the "
-                   "supporting detail; a wall of metrics with no stated position is not "
-                   "an answer to a motion.",
+                   "open with an explicit one-line vote — AYE or NAY — then make the "
+                   "actual CASE for it: 2-3 sentences of real argument, in plain "
+                   "language, for why that vote is right, BEFORE any supporting "
+                   "figures. Every figure that follows must be woven in as evidence for "
+                   "a point already made, not laid out as a freestanding report — a data "
+                   "dump with a vote label stapled on top is still not an answer to a "
+                   "motion.",
         "thread": "debate",
     },
     {
@@ -96,9 +112,12 @@ BEATS = [
                    "do not evaluate those rails — stay on Interac capacity/float for this "
                    "bounded volume specifically. What would break first, if anything, at "
                    "this scale? Relay the COO's answer. Require the COO to open with an "
-                   "explicit one-line vote — AYE or NAY — before the supporting detail; "
-                   "a wall of metrics with no stated position is not an answer to a "
-                   "motion.",
+                   "explicit one-line vote — AYE or NAY — then make the actual CASE for "
+                   "it: 2-3 sentences of real argument, in plain language, for why that "
+                   "vote is right, BEFORE any supporting figures. Every figure that "
+                   "follows must be woven in as evidence for a point already made, not "
+                   "laid out as a freestanding report — a data dump with a vote label "
+                   "stapled on top is still not an answer to a motion.",
         "thread": "debate",
     },
     {

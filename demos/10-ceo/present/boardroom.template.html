@@ -296,7 +296,7 @@ const SEAT_POS = { // % on the stage, for the balloon anchor + spotlight beam
 // ---- markdown-ish -> readable plain text ----
 function unesc(s){ return (s||'').replace(/\\r\\n|\\n/g,'\n').replace(/\\t/g,' ').replace(/\\"/g,'"'); }
 // a degenerate "I'm done" acknowledgment with no real content — not a real speaking turn
-const JUNK_RE = /^\s*\(?\s*((the )?analysis (is |now )?complete|all steps? done|all done|end of (the )?review|end of (the )?report|no answer|report above)\b/i;
+const JUNK_RE = /^\s*\(?\s*((the )?(analysis|plan) (is |now )?complete|all steps?( have been| were)? (done|executed|completed)( and recorded)?|all done|end of (the )?review|end of (the )?report|no answer|report above)\b/i;
 function isJunk(t){
   const s=(t||'').trim();
   if(s.length<80 || JUNK_RE.test(s)) return true;
@@ -317,9 +317,21 @@ function gist(md, max){
   const sentences = t.match(/[^.!?]+[.!?]+/g) || [t];
   const soft = Math.round(max*0.9);
   let out = '';
-  for(const s of sentences){ if((out+s).length>soft && out) break; out += s; }
+  // don't bail after just a bare vote label ("NAY.") — always pull in the next
+  // sentence even if it alone runs past the soft cap, so the case isn't dropped
+  for(const s of sentences){ if((out+s).length>soft && out.length>40) break; out += s; }
   out = (out||t).trim();
   return out.length>max ? out.slice(0,max-2).replace(/\s+\S*$/,'')+'…' : out;
+}
+// the chair's ruling names an explicit verdict (SHIP/DEFER/PHASE) — pull it out and
+// lead with it so the decision reads as a headline, not a word buried mid-paragraph
+const VERDICT_RE = /\*\*\s*(SHIP|DEFER|PHASE)\s*\.?\s*\*\*/i;
+function chairGist(md, max){
+  max = max || 640;
+  const m = VERDICT_RE.exec(md||'');
+  if(!m) return gist(md, max);
+  const prefix = 'RULING: '+m[1].toUpperCase()+'. ';
+  return prefix + gist(md, Math.max(120, max-prefix.length));
 }
 
 // ---- build a flat step timeline from a recording ----
@@ -393,7 +405,7 @@ function buildSteps(rec){
     }
     // the chair speaks last each beat — a longer gist (the ruling/synthesis carries weight)
     steps.push({...beatMeta, speaker:'ceo', role:'chair',
-      full:clean(b.answer)||'(no summary captured)', raw:b.answer, gist:gist(b.answer,640)||'The chair sums up.',
+      full:clean(b.answer)||'(no summary captured)', raw:b.answer, gist:chairGist(b.answer,640)||'The chair sums up.',
       outcome:(b.outcome||{}).kind});
   }
   return steps;

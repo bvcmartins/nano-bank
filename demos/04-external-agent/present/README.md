@@ -26,3 +26,21 @@ progress scrubber. The **⦿ Capture live** button (only works when served via
 `OLLAMA_API_KEY` in the environment, and a port-forward to `svc/agent-api`)
 re-runs `capture.py` against the deployed stack, saves the result as the
 canonical recording, and rebuilds `gateway.html`.
+
+## 🎥 Recording an MP4 directly (no OBS / no browser window)
+
+`record_video.py` drives a real headless Chromium (Playwright) and uses its
+native video capture — no screen-capture pipeline, no window compositing,
+no bitrate/codec settings to tune. One-time setup:
+
+    pip install playwright
+    python3 -m playwright install chromium
+
+Then:
+
+    python3 demos/04-external-agent/present/record_video.py
+    # or: --recording PATH --out /tmp/x.mp4 --speed 1.5 --width 1920 --height 1080
+
+Plays the recording end to end at 1920×1080, captures it natively, and
+muxes to H.264 MP4 with ffmpeg. Takes as long as the recording's own
+playback duration (no faster — it's driven by the real page timing).

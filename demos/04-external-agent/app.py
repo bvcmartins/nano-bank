@@ -4,9 +4,10 @@ An autonomous LLM agent operates a customer's bank ONLY through the agentic
 branch's /agent-gateway/*, under a customer-granted mandate (scoped, capped,
 revocable). It never sees the bank. Seed a demo mandate, give a high-level
 instruction, and watch the agent plan -> act (mandate-gated) -> ask the
-manager, rendered as a two-tone stepper (external agent vs. personal
-manager). Each run is also saved as a recording under present/recordings/
-so present/gateway.html can replay it as a standalone animated page.
+manager, rendered live as an animated split-screen cinematic (external
+agent vs. personal manager) embedded directly in this page, plus a plain
+step-through view. Each run is also saved as a recording under
+present/recordings/ so present/gateway.html can replay it standalone too.
 
 Config: DEMO_BRANCH_BASE (default http://localhost:8086) + AGENT_GATEWAY_TOKEN.
 The demo builds the planner LLM locally (needs OLLAMA_API_KEY).
@@ -19,6 +20,7 @@ import requests
 import streamlit as st
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "present"))
+import build_gateway  # noqa: E402
 import state  # noqa: E402
 
 from agent.external_agent.agent import ExternalAgent, GatewayHTTP
@@ -28,8 +30,8 @@ TOKEN = os.environ.get("AGENT_GATEWAY_TOKEN", "")
 HDR = {"Authorization": f"Bearer {TOKEN}"}
 RECORDINGS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "present", "recordings")
 DEFAULT_INSTRUCTION = (
-    "Pay my $50 Epcor utility bill and tell me what a loan would look like "
-    "if I want to buy a $28,000 car."
+    "Pay my $50 Epcor utility bill, then ask my personal manager to confirm the payment "
+    "went through and explain what a loan would look like if I want to buy a $28,000 car."
 )
 
 st.set_page_config(page_title="nano-bank · external agent", layout="wide")
@@ -162,23 +164,31 @@ def _event_card(e: dict) -> None:
                     f"{'🔧' if t['kind'] == 'tool' else '🧠'}{'✅' if t.get('ok') else '❌'} "
                     f"{t['name']} {t['elapsed_ms']}ms" for t in trace))
         return
-    st.success(f"✅ done — {e['steps']} step(s). Try **Revoke** then **Run agent** again: "
-               "the next act is denied at the gateway.")
+    st.success(f"✅ done — {e['steps']} step(s) completed successfully. "
+               "Want to see a denial instead? Click **Revoke**, then **Run agent** again — "
+               "the next act will be denied at the gateway (no active mandate).")
 
 
-# --- stepper: nav + centre ---------------------------------------------------
+# --- cinematic (default) + step-through -------------------------------------
 st.divider()
-nav, centre = st.columns([1.6, 5])
-with nav:
-    st.subheader("Run")
-    st.caption("Click a step to show it.")
-    for i, e in enumerate(ss.events):
-        sel = "▶ " if ss.selected == i else ""
-        if st.button(f"{sel}{_label(i, e)}", key=f"ev-{i}", use_container_width=True):
-            ss.selected = i
-    if not ss.events:
-        st.info("No run yet. Click ▶ Run agent.")
-with centre:
+tab_cinematic, tab_steps = st.tabs(["🎬 Cinematic", "📋 Step-through"])
+with tab_cinematic:
     if ss.events:
-        idx = min(ss.selected, len(ss.events) - 1)
-        _event_card(ss.events[idx])
+        st.iframe(build_gateway.render(ss.events), height=760)
+    else:
+        st.info("No run yet. Click ▶ Run agent.")
+with tab_steps:
+    nav, centre = st.columns([1.6, 5])
+    with nav:
+        st.subheader("Run")
+        st.caption("Click a step to show it.")
+        for i, e in enumerate(ss.events):
+            sel = "▶ " if ss.selected == i else ""
+            if st.button(f"{sel}{_label(i, e)}", key=f"ev-{i}", use_container_width=True):
+                ss.selected = i
+        if not ss.events:
+            st.info("No run yet. Click ▶ Run agent.")
+    with centre:
+        if ss.events:
+            idx = min(ss.selected, len(ss.events) - 1)
+            _event_card(ss.events[idx])

@@ -22,13 +22,20 @@ def _load() -> list:
         return json.load(f).get("events", [])
 
 
-def build() -> str:
+def render(events: list) -> str:
+    """Fill the template with the given events and return the HTML string.
+    Pure -- no file writes. Shared by build() (writes gateway.html) and
+    app.py (embeds the result live via st.components.v1.html)."""
     with open(TEMPLATE, encoding="utf-8") as f:
         html = f.read()
-    payload = json.dumps(_load(), ensure_ascii=False)
+    payload = json.dumps(events, ensure_ascii=False)
     idx = html.index(MARKER)
     end = html.index(";", idx)
-    html = html[:idx] + payload + html[end:]
+    return html[:idx] + payload + html[end:]
+
+
+def build() -> str:
+    html = render(_load())
     with open(OUT, "w", encoding="utf-8") as f:
         f.write(html)
     return OUT

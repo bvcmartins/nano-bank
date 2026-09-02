@@ -114,3 +114,29 @@ def test_transactions_endpoint_returns_list(monkeypatch):
 def test_accounts_endpoint_requires_token(monkeypatch):
     c = _app_with_mcp(monkeypatch, [_FakeTool("get_accounts", _ACCOUNTS)])
     assert c.get("/branch/clients/cust-1/accounts").status_code == 401
+
+
+def test_forwarded_customer_token_overrides_resolver(monkeypatch):
+    """A caller that already holds a verified bank token for this customer
+    (e.g. the UI) should have it used directly, bypassing token_resolver —
+    which only knows about seeded demo customers, not real signed-in ones."""
+    seen = {}
+
+    def fake_mcp_session(settings, cid, token):
+        seen["token"] = token
+        return _FakeClient([_FakeTool("get_accounts", _ACCOUNTS)])
+
+    monkeypatch.setattr(nano_manager, "_mcp_session", fake_mcp_session)
+    settings = Settings.from_env({"BRANCH_SERVICE_TOKEN": "svc"})
+
+    class R:
+        def resolve(self, cid):
+            raise AssertionError("token_resolver should not be consulted when a token is forwarded")
+
+    c = TestClient(create_app(settings, token_resolver=R()))
+    r = c.get("/branch/clients/cust-1/accounts", headers={
+        "Authorization": "Bearer svc",
+        "X-Nano-Customer-Token": "real-user-jwt",
+    })
+    assert r.status_code == 200
+    assert seen["token"] == "real-user-jwt"

@@ -29,6 +29,11 @@ SERVICE_CLIENT_SECRET="${SERVICE_CLIENT_SECRET:-nano-bank-visa-network-secret-ch
 CUSTOMERS="${CUSTOMERS:-25}"        # customers (each opens a credit-card account)
 VISA_CYCLES="${VISA_CYCLES:-200}"   # card purchases (auth -> capture -> settle)
 INTERAC_CYCLES="${INTERAC_CYCLES:-80}"
+# Fraction of generated customers who also register an Interac autodeposit
+# handle. Without this, INTERAC_CYCLES' inbound path has no handle to land on
+# and silently no-ops ("waiting for autodeposit registrations") no matter how
+# high INTERAC_CYCLES is set.
+INTERAC_HANDLE_PROB="${INTERAC_HANDLE_PROB:-0.6}"
 AFT_CYCLES="${AFT_CYCLES:-0}"       # off by default (float/txn/cards already move)
 LYNX_CYCLES="${LYNX_CYCLES:-0}"
 
@@ -55,7 +60,7 @@ run() {  # label ; then the command
 
 run "👥 $CUSTOMERS customers (+ credit-card accounts)" \
   env API_BASE_URL="$API_BASE_URL" COUNT="$CUSTOMERS" INTERVAL_SECONDS=0 \
-      CREDIT_CARD_PROB=1.0 SAVINGS_PROB=0.5 \
+      CREDIT_CARD_PROB=1.0 SAVINGS_PROB=0.5 INTERAC_HANDLE_PROB="$INTERAC_HANDLE_PROB" \
       "$PY" generator/generate_customers.py
 
 run "💳 $VISA_CYCLES card purchases (auth→capture→settle every cycle)" \

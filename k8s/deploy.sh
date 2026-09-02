@@ -86,7 +86,10 @@ docker build -t nano-bank-api:dev ../api
 kind load docker-image nano-bank-api:dev --name nano-bank
 
 echo "🌉 Wiring cross-cluster route to modern-core (host gateway hop)..."
-GATEWAY_IP=$(docker network inspect kind -f '{{range .IPAM.Config}}{{if .Gateway}}{{.Gateway}} {{end}}{{end}}' | awk '{print $1}')
+# The "kind" docker network has both an IPv4 and IPv6 gateway; grab the IPv4
+# one specifically. The modern-core cluster's hostPort publish (8191->30091)
+# is IPv4-only, so wiring the IPv6 gateway leaves bank-api unable to reach it.
+GATEWAY_IP=$(docker network inspect kind -f '{{range .IPAM.Config}}{{if .Gateway}}{{.Gateway}} {{end}}{{end}}' | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
 echo "   host gateway = ${GATEWAY_IP} (core published on host :8191 by cluster modern-core)"
 sed "s/__GATEWAY_IP__/${GATEWAY_IP}/" modern-core-endpoints.yaml.tmpl | kubectl apply -f -
 

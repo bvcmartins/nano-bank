@@ -104,8 +104,16 @@ class CxDB:
                 " AND created_at >= now() - (%s || ' days')::interval",
                 (segment.split(":", 1)[1], window_days))
         elif segment == "has_open_issue":
+            # 'has_open_issue' backs a "how satisfied are you with the
+            # resolution" CSAT campaign (seed_surveys.py) — a customer whose
+            # only open cx_issue is a feature_request hasn't had anything
+            # break; they asked for more, which isn't the same signal as an
+            # unresolved complaint. Exclude it so the segment (and the
+            # sentiment it drives, see open_issue_customers below) means what
+            # its own survey question assumes.
             rows = self.rows(
-                "SELECT DISTINCT customer_id::text AS c FROM cx_issues WHERE status <> 'resolved'")
+                "SELECT DISTINCT customer_id::text AS c FROM cx_issues"
+                " WHERE status <> 'resolved' AND category <> 'feature_request'")
         elif segment == "dormant":
             rows = self.rows(
                 "SELECT c.customer_id::text AS c FROM customers c"
@@ -116,8 +124,13 @@ class CxDB:
         return [r["c"] for r in rows]
 
     def open_issue_customers(self) -> set:
+        # See the matching note on resolve_segment's 'has_open_issue' branch:
+        # an open feature_request is an unmet want, not dissatisfaction, so it
+        # doesn't belong in the detractor signal customer_sentiment() builds
+        # from this set.
         return {r["c"] for r in self.rows(
-            "SELECT DISTINCT customer_id::text AS c FROM cx_issues WHERE status <> 'resolved'")}
+            "SELECT DISTINCT customer_id::text AS c FROM cx_issues"
+            " WHERE status <> 'resolved' AND category <> 'feature_request'")}
 
     def dormant_customers(self, window_days: int) -> set:
         return {r["c"] for r in self.rows(

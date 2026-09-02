@@ -12,6 +12,9 @@ Config via env vars:
   FAKER_LOCALE     Faker locale                   (default en_CA)
   REQUEST_TIMEOUT  per-request timeout, seconds    (default 10)
   SAVINGS_PROB     chance a customer also opens a savings account (default 0.6)
+  INTERAC_HANDLE_PROB  chance a customer registers their chequing account for
+                        Interac autodeposit under their own email (default 0.0,
+                        so existing callers are unaffected unless opted in)
 """
 from __future__ import annotations
 
@@ -31,10 +34,12 @@ FAKER_LOCALE = os.getenv("FAKER_LOCALE", "en_CA")
 REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "10"))
 SAVINGS_PROB = float(os.getenv("SAVINGS_PROB", "0.6"))
 CREDIT_CARD_PROB = float(os.getenv("CREDIT_CARD_PROB", "0.4"))
+INTERAC_HANDLE_PROB = float(os.getenv("INTERAC_HANDLE_PROB", "0.0"))
 
 CUSTOMERS_URL = f"{API_BASE_URL}/api/v1/customers"
 LOGIN_URL = f"{API_BASE_URL}/api/v1/auth/login"
 ACCOUNTS_URL = f"{API_BASE_URL}/api/v1/accounts"
+AUTODEPOSIT_URL = f"{API_BASE_URL}/api/v1/interac/autodeposit"
 HEALTH_URL = f"{API_BASE_URL}/health"
 
 fake = Faker(FAKER_LOCALE)
@@ -132,17 +137,18 @@ def login(session: requests.Session, email: str, password: str) -> str | None:
     return None
 
 
-def open_account(session: requests.Session, token: str, account_type: str) -> bool:
+def open_account(session: requests.Session, token: str, account_type: str) -> dict | None:
     """Open one account of the given type ('chequing'|'savings'|'credit_card').
 
-    The owning customer comes from the bearer token, not the body."""
+    The owning customer comes from the bearer token, not the body. Returns the
+    created account record, or None on failure."""
     headers = {"Authorization": f"Bearer {token}"}
     payload = {"account_type": account_type}
     try:
         resp = session.post(ACCOUNTS_URL, json=payload, headers=headers, timeout=REQUEST_TIMEOUT)
     except requests.RequestException as e:
         log(f"  ✗ account request failed: {e}")
-        return False
+        return None
 
     if resp.status_code == 201:
         a = resp.json()
@@ -154,15 +160,35 @@ def open_account(session: requests.Session, token: str, account_type: str) -> bo
             limit_str = f"  limit=${float(a['overdraft_limit']):,.0f}"
         log(f"  ✓ opened {a['account_type']} #{a['account_number']} "
             f"acct={a['account_id'][:8]}  status={a['status']}{rate_str}{limit_str}")
-        return True
+        return a
     log(f"  ✗ account {resp.status_code}: {resp.text[:200]}")
+    return None
+
+
+def register_autodeposit(session: requests.Session, token: str, email: str, account_id: str) -> bool:
+    """Register `account_id` for Interac autodeposit under the customer's own
+    email, so rail simulators (testing/interac/interac_simulator.py) have a
+    live handle to land inbound e-Transfers on — without this, generated
+    customers are invisible to the inbound path entirely."""
+    headers = {"Authorization": f"Bearer {token}"}
+    payload = {"handle_type": "email", "handle_value": email, "deposit_account_id": account_id}
+    try:
+        resp = session.post(AUTODEPOSIT_URL, json=payload, headers=headers, timeout=REQUEST_TIMEOUT)
+    except requests.RequestException as e:
+        log(f"  ✗ autodeposit request failed: {e}")
+        return False
+    if resp.status_code in (200, 201):
+        log(f"  ✓ registered Interac autodeposit handle <{email}>")
+        return True
+    log(f"  ✗ autodeposit {resp.status_code}: {resp.text[:200]}")
     return False
 
 
 def main() -> int:
     log(f"generator starting → {CUSTOMERS_URL}  "
         f"interval={INTERVAL_SECONDS}s  count={'∞' if COUNT == 0 else COUNT}  "
-        f"locale={FAKER_LOCALE}  savings_prob={SAVINGS_PROB}")
+        f"locale={FAKER_LOCALE}  savings_prob={SAVINGS_PROB}  "
+        f"interac_handle_prob={INTERAC_HANDLE_PROB}")
     wait_for_api()
 
     session = requests.Session()
@@ -178,11 +204,13 @@ def main() -> int:
                 if token:
                     # Everyone gets a chequing account; some also open savings
                     # and/or a credit card.
-                    open_account(session, token, "chequing")
+                    chequing = open_account(session, token, "chequing")
                     if random.random() < SAVINGS_PROB:
                         open_account(session, token, "savings")
                     if random.random() < CREDIT_CARD_PROB:
                         open_account(session, token, "credit_card")
+                    if chequing and random.random() < INTERAC_HANDLE_PROB:
+                        register_autodeposit(session, token, customer["email"], chequing["account_id"])
             time.sleep(INTERVAL_SECONDS)
     except KeyboardInterrupt:
         log("interrupted")

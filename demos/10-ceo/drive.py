@@ -24,7 +24,10 @@ BEATS = [
                    "the table. Right now just open the meeting and state, in one line "
                    "each, the question you will put to the CFO, COO, CTO and CXO. This is "
                    "a framing statement, not a report — open it the way a chair actually "
-                   "would: confident and plain, in command of the room.",
+                   "would: confident and plain, in command of the room. Do NOT describe "
+                   "your own process or planning as a substitute for actually stating the "
+                   "four questions — a meta-comment about being ready is not an opening, "
+                   "the content itself is.",
         "thread": "board",
     },
     {

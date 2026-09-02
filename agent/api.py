@@ -100,46 +100,61 @@ def create_app(settings: Settings, *, assist_fn=nano_manager.assist,
     def _token(cid: str) -> Optional[str]:
         return token_resolver.resolve(cid) if token_resolver else None
 
+    def _resolve_token(cid: str, forwarded: Optional[str]) -> Optional[str]:
+        """Prefer a token the caller forwards for this customer (e.g. the UI
+        relaying its own already-verified nano-bank access token) over minting
+        one via token_resolver, which only knows about seeded demo customers."""
+        return forwarded or _token(cid)
+
     @app.get("/health")
     def health():
         return {"status": "ok"}
 
-    async def _tool(cid: str, name: str, args: Optional[dict] = None, *, one: bool = False):
-        client = nano_manager._mcp_session(settings, cid, _token(cid))
+    async def _tool(cid: str, name: str, args: Optional[dict] = None, *, one: bool = False,
+                     token: Optional[str] = None):
+        client = nano_manager._mcp_session(settings, cid, token)
         for t in await client.get_tools():
             if t.name == name:
                 return _unwrap(await t.ainvoke(args or {}), one=one)
         raise HTTPException(500, f"{name} tool unavailable")
 
     @app.get("/branch/clients/{cid}/profile")
-    async def profile(cid: str, authorization: str = Header(None)):
+    async def profile(cid: str, authorization: str = Header(None),
+                       x_nano_customer_token: Optional[str] = Header(None)):
         _auth(authorization)
-        return await _tool(cid, "get_profile", one=True)
+        return await _tool(cid, "get_profile", one=True, token=_resolve_token(cid, x_nano_customer_token))
 
     @app.get("/branch/clients/{cid}/accounts")
-    async def accounts(cid: str, authorization: str = Header(None)):
+    async def accounts(cid: str, authorization: str = Header(None),
+                        x_nano_customer_token: Optional[str] = Header(None)):
         _auth(authorization)
-        return await _tool(cid, "get_accounts")
+        return await _tool(cid, "get_accounts", token=_resolve_token(cid, x_nano_customer_token))
 
     @app.get("/branch/clients/{cid}/transactions")
-    async def transactions(cid: str, limit: int = 20, authorization: str = Header(None)):
+    async def transactions(cid: str, limit: int = 20, authorization: str = Header(None),
+                            x_nano_customer_token: Optional[str] = Header(None)):
         _auth(authorization)
-        return await _tool(cid, "get_transactions", {"limit": limit})
+        return await _tool(cid, "get_transactions", {"limit": limit},
+                            token=_resolve_token(cid, x_nano_customer_token))
 
     @app.post("/branch/clients/{cid}/message")
-    async def message(cid: str, body: MessageIn, authorization: str = Header(None)):
+    async def message(cid: str, body: MessageIn, authorization: str = Header(None),
+                       x_nano_customer_token: Optional[str] = Header(None)):
         _auth(authorization)
-        return await assist_fn(settings, cid, _token(cid), body.message, body.thread_id)
+        return await assist_fn(settings, cid, _resolve_token(cid, x_nano_customer_token),
+                                body.message, body.thread_id)
 
     @app.post("/branch/clients/{cid}/actions/{aid}/confirm")
-    async def confirm(cid: str, aid: str, authorization: str = Header(None)):
+    async def confirm(cid: str, aid: str, authorization: str = Header(None),
+                       x_nano_customer_token: Optional[str] = Header(None)):
         _auth(authorization)
-        return await confirm_fn(settings, cid, _token(cid), aid, cancel=False)
+        return await confirm_fn(settings, cid, _resolve_token(cid, x_nano_customer_token), aid, cancel=False)
 
     @app.post("/branch/clients/{cid}/actions/{aid}/cancel")
-    async def cancel(cid: str, aid: str, authorization: str = Header(None)):
+    async def cancel(cid: str, aid: str, authorization: str = Header(None),
+                      x_nano_customer_token: Optional[str] = Header(None)):
         _auth(authorization)
-        return await confirm_fn(settings, cid, _token(cid), aid, cancel=True)
+        return await confirm_fn(settings, cid, _resolve_token(cid, x_nano_customer_token), aid, cancel=True)
 
     # --- external mandated-agent gateway: the ONLY door for the external agent ---
     from .mandate_gateway import MandateClient, MandatePEP

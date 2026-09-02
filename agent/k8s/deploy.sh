@@ -30,4 +30,12 @@ kubectl --context "$CTX" apply -f k8s/console.yaml
 kubectl --context "$CTX" -n nano-bank rollout status deploy/agent-mcp     --timeout=180s
 kubectl --context "$CTX" -n nano-bank rollout status deploy/agent-api     --timeout=240s
 kubectl --context "$CTX" -n nano-bank rollout status deploy/agent-console --timeout=180s
+
+# nano-bank-ui (deployed by the repo-root k8s/deploy.sh, which typically runs
+# before this script) reads BRANCH_SERVICE_TOKEN from this same secret to call
+# the branch API from the chat box. Its pod env only picks up secret values at
+# creation, so restart it now that the secret exists/changed — a no-op if the
+# UI isn't deployed yet.
+kubectl --context "$CTX" -n nano-bank rollout restart deployment/nano-bank-ui 2>/dev/null || true
+
 echo "✅ agent stack up"

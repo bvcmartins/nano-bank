@@ -1,9 +1,13 @@
 """Container entrypoint for the Agentic-Branch API.
 
-Resolves the GLM model at startup, then serves the FastAPI app. A dev-only
-SeedTokenResolver is wired so that seeding (POST /branch/seed) registers the
-seeded customers' credentials in THIS process, letting the confirm path mint
-each customer's nano-bank token (X-Nano-Token) — the LLM never sees it.
+Resolves the GLM model at startup, then serves the FastAPI app. Callers that
+already hold a verified nano-bank access token for the customer (e.g. the UI,
+which authenticated them via cookie) forward it on the `X-Nano-Customer-Token`
+header and the branch routes use it directly. A dev-only SeedTokenResolver is
+wired as a fallback for callers that don't have one: seeding (POST
+/branch/seed) registers the seeded customers' credentials in THIS process,
+letting the confirm path mint each customer's nano-bank token. Either way the
+LLM never sees it.
 """
 from __future__ import annotations
 

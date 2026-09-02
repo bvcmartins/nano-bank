@@ -54,7 +54,14 @@ PLANNER_SYS = (
     '{"kind":"act","operation":"transfer_out|open_account|register_payee","params":{...}} '
     'or {"kind":"message","text":"..."} to ask the manager a question. '
     'For a bill payment use {"kind":"act","operation":"transfer_out","params":{"amount":"50"}} '
-    "(the gateway routes it to the biller). Only use granted capabilities; keep it minimal."
+    "(the gateway routes it to the biller). A message's text must be phrased as a genuine "
+    "QUESTION for the manager to answer — you have no visibility into the bank yourself, so "
+    "never assert as fact something you have not verified through the manager (e.g. do not "
+    "say 'the payment has been initiated'; ask the manager to confirm it by checking the "
+    "account's recent transactions). If the instruction covers more than one topic (e.g. "
+    "confirming a payment AND asking about a product), ask about all of it in a single "
+    "message, as a numbered list ('1) ... 2) ...') so the manager can address each part in "
+    "turn. Only use granted capabilities; keep it minimal."
 )
 
 
