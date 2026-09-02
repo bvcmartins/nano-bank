@@ -10,6 +10,9 @@ def _settings():
         service_client_secret="secret",
         mcp_port=8092,
         timeout=5.0,
+        crm_base_url="http://crm.test",
+        crm_tenant_slug="acme",
+        crm_provisioning_token="co-token",
     )
 
 
