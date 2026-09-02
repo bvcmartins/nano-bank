@@ -6,7 +6,7 @@ from agent.api import create_app
 def _app():
     settings = Settings.from_env({"BRANCH_SERVICE_TOKEN": "svc"})
 
-    async def fake_assist(settings, cid, token, message, thread_id=None):
+    async def fake_assist(settings, cid, token, message, thread_id=None, crm_token=None):
         return {"answer": f"hi {cid}", "thread_id": "th1",
                 "pending_action": {"id": "act-1", "summary": "Transfer 50"}}
 
@@ -57,3 +57,54 @@ def test_seed_route_requires_auth_and_returns_customers():
 def test_no_seed_route_when_seed_fn_absent():
     c = _app()
     assert c.post("/branch/seed", headers={"Authorization": "Bearer svc"}).status_code == 404
+
+
+def test_message_route_passes_the_resolved_crm_token_to_assist():
+    seen = {}
+    settings = Settings.from_env({"BRANCH_SERVICE_TOKEN": "svc"})
+
+    async def fake_assist(settings, cid, token, message, thread_id=None, crm_token=None):
+        seen["crm_token"] = crm_token
+        return {"answer": "ok", "thread_id": "t1"}
+
+    class NanoResolver:
+        def resolve(self, cid):
+            return "nano-tok"
+
+    class CrmResolver:
+        async def resolve(self, cid):
+            return "crm-tok"
+
+    app = create_app(
+        settings,
+        assist_fn=fake_assist,
+        token_resolver=NanoResolver(),
+        crm_resolver=CrmResolver(),
+    )
+    client = TestClient(app)
+    resp = client.post(
+        "/branch/clients/cust-1/message",
+        json={"message": "hi"},
+        headers={"Authorization": "Bearer svc"},
+    )
+    assert resp.status_code == 200
+    assert seen["crm_token"] == "crm-tok"
+
+
+def test_message_route_works_with_no_crm_resolver_configured():
+    # Backward compatibility: omitting crm_resolver entirely must not break the
+    # existing nano-only path.
+    settings = Settings.from_env({"BRANCH_SERVICE_TOKEN": "svc"})
+
+    async def fake_assist(settings, cid, token, message, thread_id=None, crm_token=None):
+        assert crm_token is None
+        return {"answer": "ok", "thread_id": "t1"}
+
+    app = create_app(settings, assist_fn=fake_assist, token_resolver=None)
+    client = TestClient(app)
+    resp = client.post(
+        "/branch/clients/cust-1/message",
+        json={"message": "hi"},
+        headers={"Authorization": "Bearer svc"},
+    )
+    assert resp.status_code == 200

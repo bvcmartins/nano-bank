@@ -13,7 +13,18 @@ from .config import Settings
 from . import model_factory as mf
 from .api import create_app, SeedTokenResolver
 from .bank import BankClient
+from .crm import CrmClient, CrmTokenResolver
+from . import crm as crmmod
+from .db import ClientContext
 from . import seed as seedmod
+
+
+def _profile_name(db: ClientContext, customer_id: str) -> str:
+    p = db.profile(customer_id) or {}
+    first = p.get("first_name", "")
+    last = p.get("last_name", "")
+    name = f"{first} {last}".strip()
+    return name or customer_id
 
 
 def build() -> "tuple":
@@ -26,7 +37,15 @@ def build() -> "tuple":
         resolver.creds.update(out["creds"])
         return {"customers": out["customers"]}
 
-    app = create_app(settings, token_resolver=resolver, seed_fn=seed_fn)
+    db = ClientContext(settings.db)
+    crm_client = CrmClient(settings)
+
+    async def ask_coo(message: str) -> None:
+        await crmmod._post_ask(settings.coo_base_url, message)
+
+    crm_resolver = CrmTokenResolver(settings, crm_client, ask_coo, lambda cid: _profile_name(db, cid))
+
+    app = create_app(settings, token_resolver=resolver, crm_resolver=crm_resolver, seed_fn=seed_fn)
     return settings, app
 
 
