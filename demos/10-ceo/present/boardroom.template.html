@@ -15,6 +15,8 @@
     --text:#ffffff; --muted:#cbd5e1; --faint:#8ea3b8;
     --cfo:#219ebc; --coo:#fb8500; --cto:#8ecae6; --cxo:#c3e4f2; --ceo:#ffb703;
     --signal:#ffb703; --danger:#fb8500;
+    /* Build tab: the coder is a distinct actor, not one of the five officers */
+    --coder:#3ddc97; --ok:#4ade80;
     --disp:'Geist',system-ui,sans-serif;
     --body:'Geist',system-ui,sans-serif;
     --mono:'Geist Mono',ui-monospace,monospace;
@@ -67,27 +69,37 @@
 
   /* ---- build stage: CTO -> coder delegation + step-through ---- */
   .build-stage{display:none;flex:1 1 auto;min-height:340px;flex-direction:column;gap:12px;overflow:hidden}
-  .build-ruling{font-family:var(--body);font-size:13px;line-height:1.5;color:var(--muted);
-    background:rgba(255,255,255,.05);border:1px solid var(--edge);border-radius:12px;padding:12px 16px;
+  .build-ruling{font-family:var(--disp);font-size:15px;font-weight:500;line-height:1.55;color:var(--text);
+    background:rgba(255,255,255,.05);border:1px solid var(--edge);border-left:3px solid var(--ceo);
+    border-radius:4px 12px 12px 4px;padding:14px 18px;
     max-height:5.4em;overflow:auto;flex:none}
   .build-ruling b{color:var(--ceo)}
   .build-row{flex:1 1 auto;display:flex;gap:14px;min-height:0}
   .build-timeline{width:min(260px,30%);flex:none;overflow-y:auto;display:flex;flex-direction:column;gap:4px;
-    background:rgba(255,255,255,.04);border:1px solid var(--edge);border-radius:12px;padding:8px}
-  .build-timeline .ti{display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:8px;cursor:pointer;
-    font-family:var(--mono);font-size:11px;color:var(--faint);transition:.15s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    background:rgba(255,255,255,.04);border:1px solid var(--edge);border-radius:12px;padding:8px;position:relative}
+  .build-timeline .ti{display:flex;align-items:center;gap:8px;padding:7px 9px 7px 7px;border-radius:8px;cursor:pointer;
+    font-family:var(--mono);font-size:11px;color:var(--faint);transition:.2s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    border-left:3px solid transparent}
   .build-timeline .ti:hover{background:rgba(255,255,255,.06)}
-  .build-timeline .ti.active{background:linear-gradient(90deg,rgba(142,202,230,.18),rgba(33,158,188,.10));color:var(--text);font-weight:600}
+  .build-timeline .ti.active{background:linear-gradient(90deg,color-mix(in srgb,var(--tc,var(--cto)) 22%,transparent),color-mix(in srgb,var(--tc,var(--cto)) 8%,transparent));
+    color:var(--text);font-weight:600;border-left-color:var(--tc,var(--cto))}
   .build-timeline .ti.done{color:var(--muted)}
+  .build-timeline .ti .dot{width:7px;height:7px;border-radius:50%;flex:none;background:var(--tc,var(--faint));opacity:.5}
+  .build-timeline .ti.active .dot{opacity:1;box-shadow:0 0 7px 1px var(--tc,var(--cto));animation:dotpulse 1.6s infinite}
+  @keyframes dotpulse{0%,100%{opacity:1}50%{opacity:.55}}
   .build-timeline .ti .tii{font-size:14px;flex:none}
   .build-panel{flex:1 1 auto;display:flex;flex-direction:column;min-width:0;background:rgba(255,255,255,.04);
-    border:1px solid var(--edge);border-radius:12px;overflow:hidden}
+    border:1px solid var(--edge);border-radius:12px;overflow:hidden;transition:.35s}
+  .build-panel.active{border-color:var(--pc,var(--cto));box-shadow:0 0 0 1px var(--pc,var(--cto)),0 0 34px -8px var(--pc,var(--cto))}
   .build-step-head{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line);flex:none}
+  .build-who{font-family:var(--mono);font-size:10px;letter-spacing:.12em;font-weight:800;text-transform:uppercase;
+    padding:4px 10px;border-radius:999px;background:color-mix(in srgb,var(--pc,var(--cto)) 20%,transparent);
+    color:var(--pc,var(--cto));border:1px solid color-mix(in srgb,var(--pc,var(--cto)) 55%,transparent);flex:none}
   .build-step-icon{font-size:22px}
   .build-step-label{font-family:var(--mono);font-size:13px;letter-spacing:.02em;color:var(--text);font-weight:600}
   .build-step-body{flex:1 1 auto;overflow:auto;margin:0;padding:16px;font-family:var(--mono);font-size:13px;
     line-height:1.55;color:var(--muted);white-space:pre-wrap;word-break:break-word}
-  .build-step-body.is-diff{font-family:var(--mono);font-size:12.5px;line-height:1.5}
+  .build-step-body.is-diff{font-family:var(--mono);font-size:12.5px;line-height:1.5;background:rgba(0,0,0,.16)}
   .build-step-body .d-add{color:#8ecae6;background:rgba(142,202,230,.10);display:block}
   .build-step-body .d-del{color:#fb8500;background:rgba(251,133,0,.10);display:block}
   .build-step-body .d-hunk{color:var(--ceo);display:block;font-weight:600}
@@ -233,8 +245,9 @@
     <div class="build-ruling" id="buildRuling"></div>
     <div class="build-row">
       <div class="build-timeline" id="buildTimeline"></div>
-      <div class="build-panel">
+      <div class="build-panel" id="buildPanel">
         <div class="build-step-head">
+          <span class="build-who" id="buildWho">CTO</span>
           <span class="build-step-icon" id="buildIcon">📋</span>
           <span class="build-step-label" id="buildLabel"></span>
         </div>
@@ -374,6 +387,20 @@ function buildCoderSteps(rec){
   return steps;
 }
 const BUILD_KINDS = new Set(['delegate','reasoning','tool','diff','result']);
+// The coder is a distinct actor from the five officers, not one of their
+// colors; delegate/result bracket the CTO's own turns, reasoning/tool are
+// the coder at work, diff gets the chair's amber (it's the record, not a speaker).
+function buildAccent(s){
+  if(s.kind==='delegate') return 'var(--cto)';
+  if(s.kind==='result') return s.icon==='❌' ? 'var(--danger)' : 'var(--ok)';
+  if(s.kind==='diff') return 'var(--ceo)';
+  return 'var(--coder)'; // reasoning, tool
+}
+function buildWhoLabel(s){
+  if(s.kind==='delegate'||s.kind==='result') return 'CTO';
+  if(s.kind==='diff') return 'DIFF';
+  return 'CODER';
+}
 
 function escapeHtml(s){
   return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -412,7 +439,7 @@ function buildSteps(rec){
 }
 
 let SESSION='debate', STEPS=[], idx=0, playing=false, timer=null, speed=1, clock=0, clockTimer=null;
-let typeTimer=null;
+let typeTimer=null, diffTimer=null;
 const REDUCE = window.matchMedia && window.matchMedia('(prefers-reduced-motion:reduce)').matches;
 
 const $=id=>document.getElementById(id);
@@ -420,7 +447,7 @@ function seat(o){return document.querySelector('.seat.'+o);}
 
 // stream text into an element, character by character ("coming in" as they speak)
 function typeInto(el, text){
-  clearInterval(typeTimer);
+  clearInterval(typeTimer); clearInterval(diffTimer);
   if(REDUCE){ el.textContent=text; return; }
   el.textContent=''; let i=0; const total=text.length;
   const per=Math.max(9, Math.min(34, 20/speed));   // faster at higher playback speed
@@ -431,7 +458,36 @@ function typeInto(el, text){
   }, per);
 }
 
+// a diff has no natural "spoken words" to type char by char -- reveal it one
+// line at a time instead, like it's streaming out of the coder's terminal
+function typeDiffLines(el, text){
+  clearInterval(typeTimer); clearInterval(diffTimer);
+  const lines=(text||'').split('\n');
+  if(REDUCE || !lines.length){ el.innerHTML=diffHtml(text); return; }
+  el.innerHTML=''; let i=0;
+  const per=Math.max(28, Math.min(90, 55/speed));
+  diffTimer=setInterval(()=>{
+    i=Math.min(lines.length, i+1);
+    el.innerHTML=diffHtml(lines.slice(0,i).join('\n'));
+    el.scrollTop=el.scrollHeight;
+    if(i>=lines.length) clearInterval(diffTimer);
+  }, per);
+}
+
 function dwell(step){
+  if(BUILD_KINDS.has(step.kind)){
+    // must be at least as long as the reveal above takes, or auto-play
+    // advances mid-type and the step looks cut off
+    if(step.kind==='diff'){
+      const lines=(step.full||'').split('\n').length;
+      const per=Math.max(28, Math.min(90, 55/speed));
+      return lines*per + 900/speed;
+    }
+    const total=(step.full||'').length;
+    const per=Math.max(9, Math.min(34, 20/speed));
+    const perTick=total>240?2:1;
+    return Math.ceil(total/perTick)*per + 900/speed;
+  }
   const words=(step.gist||'').split(/\s+/).length;
   return Math.min(7200, 2500 + words*130) / speed;
 }
@@ -443,11 +499,17 @@ function renderBuild(){
   $('meta').innerHTML = 'Step <b>'+(idx+1)+'</b>/'+STEPS.length;
   $('fill').style.width = ((idx+1)/STEPS.length*100)+'%';
 
+  const ac=buildAccent(s);
+  $('buildPanel').classList.add('active');
+  $('buildPanel').style.setProperty('--pc', ac);
+  $('buildWho').textContent = buildWhoLabel(s);
+  $('buildWho').style.setProperty('--pc', ac);
+
   $('buildIcon').textContent = s.icon||'🔧';
   $('buildLabel').textContent = s.label||'';
   const body=$('buildBody');
-  if(s.kind==='diff'){ body.innerHTML=diffHtml(s.full); body.classList.add('is-diff'); }
-  else { body.textContent = s.full||''; body.classList.remove('is-diff'); }
+  if(s.kind==='diff'){ body.classList.add('is-diff'); typeDiffLines(body, s.full||''); }
+  else { body.classList.remove('is-diff'); typeInto(body, s.full||''); }
 
   document.querySelectorAll('.build-timeline .ti').forEach((el,i)=>{
     el.classList.toggle('active', i===idx);
@@ -456,7 +518,7 @@ function renderBuild(){
   const active=document.querySelector('.build-timeline .ti.active');
   if(active) active.scrollIntoView({block:'nearest'});
 
-  $('capLead').innerHTML='TRANSCRIPT&nbsp;&nbsp;<span class="spk" style="color:var(--cto)">'+(s.label||'')+'</span>';
+  $('capLead').innerHTML='TRANSCRIPT&nbsp;&nbsp;<span class="spk" style="color:'+ac+'">'+(s.label||'')+'</span>';
   $('capBody').textContent = s.gist || (s.full||'').slice(0,300);
 }
 
@@ -555,7 +617,8 @@ function loadSession(name){
     const tl=$('buildTimeline'); tl.innerHTML='';
     STEPS.forEach((s,i)=>{
       const d=document.createElement('div'); d.className='ti';
-      d.innerHTML = '<span class="tii">'+(s.icon||'🔧')+'</span><span>'+(s.label||'')+'</span>';
+      d.style.setProperty('--tc', buildAccent(s));
+      d.innerHTML = '<span class="dot"></span><span class="tii">'+(s.icon||'🔧')+'</span><span>'+(s.label||'')+'</span>';
       d.onclick=()=>go(i);
       tl.appendChild(d);
     });
@@ -590,9 +653,10 @@ function mdLite(md){
 function openReader(){
   const s=STEPS[idx]; if(!s) return;
   if(BUILD_KINDS.has(s.kind)){
-    $('rIcon').textContent=s.icon||'🔧'; $('rIcon').style.borderColor='var(--cto)';
-    $('rWho').textContent=s.label||''; $('rWho').style.color='var(--cto)';
-    $('rSub').textContent='Build · CTO ⇄ Coder';
+    const ac=buildAccent(s);
+    $('rIcon').textContent=s.icon||'🔧'; $('rIcon').style.borderColor=ac;
+    $('rWho').textContent=s.label||''; $('rWho').style.color=ac;
+    $('rSub').textContent='Build · '+buildWhoLabel(s);
     $('rBody').innerHTML = s.kind==='diff' ? '<pre style="margin:0;font-family:var(--mono)">'+diffHtml(s.full)+'</pre>'
                                             : mdLite(s.full);
     $('rBody').scrollTop=0;
