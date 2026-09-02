@@ -92,7 +92,11 @@ def main() -> None:
     p.add_argument("--out", default="/tmp/demo4-gateway.mp4")
     p.add_argument("--width", type=int, default=1920)
     p.add_argument("--height", type=int, default=1080)
-    p.add_argument("--speed", type=float, default=1.0)
+    # The page's own speed slider only goes down to 0.5 (min="0.5" on
+    # #speed) -- anything lower gets silently clamped by the browser, so
+    # 0.5 is the slowest a recording actually plays. Default to that for a
+    # watchable pace on dense text; --speed 1.0 restores the page default.
+    p.add_argument("--speed", type=float, default=0.5)
     p.add_argument("--no-sandbox", action="store_true", default=True,
                    help="pass Chromium --no-sandbox (default on; needed in most containers)")
     args = p.parse_args()

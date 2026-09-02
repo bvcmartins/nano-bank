@@ -168,8 +168,39 @@
 <script>
 const EVENTS = /*__EVENTS__*/ [];
 
+// A markdown table (header row + |---|---| separator + data rows) has no
+// plain-text equivalent worth typewriting character by character, so turn
+// each data row into one readable "• Header: value · Header: value" line
+// using the header cells as labels -- handles any table shape the manager
+// produces (it isn't a fixed format run to run).
+function mdTableToText(md){
+  const lines=(md||'').split('\n'), out=[];
+  const rowRe=/^\s*\|.*\|\s*$/, sepRe=/^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)+\|?\s*$/;
+  const cells=line=>line.trim().replace(/^\||\|$/g,'').split('|').map(s=>s.trim());
+  let i=0;
+  while(i<lines.length){
+    if(rowRe.test(lines[i]) && sepRe.test(lines[i+1]||'')){
+      const headers=cells(lines[i]);
+      i+=2;
+      while(i<lines.length && rowRe.test(lines[i])){
+        const vals=cells(lines[i]);
+        const parts=headers.map((h,idx)=> vals[idx] ? h+': '+vals[idx] : null).filter(Boolean);
+        if(parts.length) out.push('• '+parts.join(' · '));
+        i++;
+      }
+      continue;
+    }
+    out.push(lines[i]); i++;
+  }
+  return out.join('\n');
+}
 function clean(md){
-  return (md||'').replace(/`{1,3}/g,'').replace(/\*\*/g,'').replace(/[*_]/g,'')
+  return mdTableToText(md||'')
+    // a standalone markdown horizontal rule ("---") would otherwise be
+    // misread by the bullet-list rule below as a "-" bullet, rendering
+    // as a stray "• --"
+    .replace(/^\s*-{3,}\s*$/gm,'').replace(/^\s*\*{3,}\s*$/gm,'')
+    .replace(/`{1,3}/g,'').replace(/\*\*/g,'').replace(/[*_]/g,'')
     .replace(/^#{1,6}\s*/gm,'').replace(/^\s*[-•]\s*/gm,'• ').replace(/\n{3,}/g,'\n\n').trim();
 }
 function traceLine(trace){
@@ -217,12 +248,18 @@ const $=id=>document.getElementById(id);
 
 function typeInto(el, text){
   clearInterval(typeTimer);
-  if(REDUCE){ el.textContent=text; return; }
+  const box=el.parentElement;  // .bubble -- the scrollable container
+  if(REDUCE){ el.textContent=text; if(box) box.scrollTop=box.scrollHeight; return; }
   el.textContent=''; let i=0; const total=text.length;
+  if(box) box.scrollTop=0;
   const per=Math.max(9, Math.min(28, 18/speed));
   typeTimer=setInterval(()=>{
     i=Math.min(total, i + (total>240?2:1));
     el.textContent=text.slice(0,i);
+    // follow the typing cursor once the text overflows the bubble, so a
+    // long answer (e.g. the full loan breakdown) doesn't type past the
+    // visible fold and finish invisibly below it
+    if(box) box.scrollTop=box.scrollHeight;
     if(i>=total) clearInterval(typeTimer);
   }, per);
 }
