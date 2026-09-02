@@ -12,8 +12,10 @@ Drives present/capture.py against $DEMO_BRANCH_BASE (default
 http://localhost:8086 — port-forward svc/agent-api first).
 """
 from __future__ import annotations
+import contextlib
 import json
 import os
+import socket
 import subprocess
 import sys
 import threading
@@ -96,10 +98,24 @@ class Handler(SimpleHTTPRequestHandler):
         self._json(404, {"error": "not found"})
 
 
+class DualStackServer(ThreadingHTTPServer):
+    # http.server's own idiom (see http.server.test()'s DualStackServer) --
+    # HTTPServer defaults to AF_INET (IPv4-only), which refuses connections
+    # to "localhost" on setups where that resolves to ::1 first (the Linux
+    # default). Binding AF_INET6 to "::" and clearing IPV6_V6ONLY accepts
+    # both IPv6 and IPv4 clients on one socket.
+    address_family = socket.AF_INET6
+
+    def server_bind(self):
+        with contextlib.suppress(Exception):
+            self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        return super().server_bind()
+
+
 def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8521
     _rebuild()
-    httpd = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+    httpd = DualStackServer(("::", port), Handler)
     print(f"▶ gateway cinematic: http://localhost:{port}/gateway.html")
     httpd.serve_forever()
 
