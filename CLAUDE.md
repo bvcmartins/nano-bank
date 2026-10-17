@@ -1,112 +1,95 @@
-# CLAUDE.md
+# CLAUDE.md — nano-bank
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-## What this project is
-
-An experimental Canadian challenger-bank core API — Rust (`axum 0.7`) over a PostgreSQL 16 double-entry ledger running in a local Kind (Kubernetes-in-Docker) cluster. The schema and infrastructure are fully built; most handler business logic is still TODO stubs. The card payment rails (`/api/v1/cards/*`) are the most complete part.
+Guidance for working in this repo. nano-bank is a toy Canadian challenger bank:
+a Rust/axum API over a PostgreSQL 16 double-entry subledger on a local Kind
+cluster, posting its general ledger to a swappable core, screening money
+movement through an external fraud engine, and operated by Python LLM agents.
+This file focuses on the parts that aren't obvious from the code; `api/CLAUDE.md`
+covers API internals and `README.md` the sibling-repo ecosystem.
 
 ## Commands
 
-All Rust commands run from `api/`:
+Rust, from `api/`:
 
 ```bash
-cargo check          # fast type-check without producing a binary
-cargo build          # compile
-cargo run            # build + start API on 0.0.0.0:8081
-cargo fmt            # format
-cargo clippy         # lint
-cargo test           # run tests (dev-dependencies are wired but no tests exist yet)
+cargo check | build | fmt | clippy
+cargo run            # API on 0.0.0.0:8081
+cargo test           # integration tests in api/tests/ — need the DB (and a core) up
 ```
 
-Infrastructure (run from repo root):
+Infrastructure, from the repo root:
 
 ```bash
-kind create cluster --config k8s/kind-cluster-config.yaml   # one-time cluster setup
-./k8s/deploy.sh                                              # deploy Postgres + run DDL init Job
+./scripts/deploy-all.sh                                           # full stack in Kind
+./k8s/deploy.sh                                                   # Postgres + DDL init Job (+ bank-api)
 kubectl port-forward -n nano-bank svc/postgres-service 5432:5432  # required before cargo run
 kubectl exec -it -n nano-bank deployment/postgres -- psql -U nanobank_user -d nano_bank_db
-testing/cleanup.sh --dry-run   # preview row counts
-testing/cleanup.sh             # TRUNCATE customers CASCADE (wipes all data, GL accounts self-heal)
+testing/cleanup.sh [--dry-run]   # TRUNCATE customers CASCADE (system GL accounts self-heal)
 ```
 
-Config override via env vars uses prefix `NANO_BANK__` with `__` as separator (e.g. `NANO_BANK__DATABASE__HOST`). Layer order: `config/default.toml` → `config/{RUN_MODE}.toml` → `config/local.toml` → env vars.
+Python packages (`agent/`, `csuite/`, `ceo/` `cfo/` `coo/` `cto/` `cxo/`
+`coder/`, `finance/`, `operations/`, `platform_mcp/`, `cx/`) each have a
+`tests/` dir run with `pytest`.
 
-## Architecture
+## Core invariants (read before touching money code)
 
 ### Request flow
 
 ```
 HTTP request
-  → axum middleware stack (CORS, gzip, 30s timeout, 10MB body limit, tracing)
-  → handler fn (State<AppState>, Json<RequestType>) -> Result<(StatusCode, Json<ResponseType>), AppError>
-  → sqlx raw query against PgPool
+  → axum middleware (CORS, gzip, 30s timeout, 10MB body limit, tracing)
+  → handler fn (State<AppState>, ...) -> Result<_, AppError>
+  → [fraud::gate::screen() for money movement — BEFORE the DB tx opens]
+  → inline sqlx SQL in a PgTx; Ledger port GL post inside the same tx
   → PostgreSQL triggers mutate balances / enforce invariants
-  → AppError::into_response() serialises errors as { "error": { "code", "message", "details" } }
+  → AppError serialises as { "error": { "code", "message", "details" } }
 ```
 
-`AppState` (in `handlers/mod.rs`) holds a cloned `PgPool` and `Settings`. It is injected into every handler via axum's `State` extractor.
+`AppState` (`handlers/mod.rs`) holds the `PgPool`, `Settings`, the `ledger`
+adapter and the `fraud` adapter.
 
-### Database interaction pattern
+### Database pattern
 
-There is no ORM, no repository layer, and no service layer — those modules exist as empty placeholders. All SQL is inline in the handler using `sqlx::query_as::<_, ModelType>(raw_sql).bind(...).fetch_one(&pool)`.
+No ORM; `repositories/`, `services/` are empty placeholders. SQL is inline in
+handlers. Postgres error codes map directly: `23505` → `Conflict`, `23503` /
+`23514` → `BadRequest`.
 
-Postgres constraint codes are matched directly in handlers to return correct HTTP statuses:
-- `23505` → `AppError::Conflict` (unique violation)
-- `23503` → `AppError::BadRequest` (FK violation)
-- `23514` → `AppError::BadRequest` (CHECK violation)
+### Double-entry (critical)
 
-### Double-entry ledger (critical invariant)
+Both legs of a local transaction **must be inserted in one multi-row `INSERT`**
+— use `post_two_legged()` in `handlers/cards.rs` (shared by other handlers).
+`trigger_validate_transaction_balance` (AFTER INSERT on `transaction_entries`)
+rejects an unbalanced transaction, so one-leg-at-a-time inserts fail.
 
-Both legs of every transaction **must be inserted in a single multi-row `INSERT` statement** — see `post_two_legged()` in `handlers/cards.rs`. The reason: `trigger_validate_transaction_balance` (AFTER INSERT on `transaction_entries`) checks that `SUM(debits) = SUM(credits)` for the transaction and raises an exception if they don't balance. Inserting one leg at a time trips this trigger between inserts.
+Other triggers (`src/core/tables/06_triggers.sql`):
+- `trigger_update_account_balance` — maintains `accounts.balance` and
+  `balance_before/after`. Never update balances directly. It does **not**
+  maintain `available_balance`; handlers recompute that on customer accounts.
+- `trigger_generate_account_number` — overwrites `account_number`, so system/GL
+  accounts are keyed by `(customer_id, account_type)`, never by number.
 
-Other key triggers (all in `src/core/tables/06_triggers.sql`):
-- `trigger_update_account_balance` — BEFORE INSERT on `transaction_entries`: updates `accounts.balance` and fills `balance_before`/`balance_after`. Never update balances directly.
-- `trigger_generate_account_number` — BEFORE INSERT on `accounts`: overwrites `account_number` with a random 12-digit value. GL accounts cannot be found by account number; they are keyed by `(customer_id, account_type)`.
-
-### Card payment rails GL accounts
-
-Two internal accounts exist under `system@nano.bank`:
-- `VISA_CLEARING` (`account_type = chequing`) — carries a negative balance representing the issuer's obligation to the network
-- `BANK_SETTLEMENT` (`account_type = savings`) — the funding account
-
-Both carry a $1 trillion overdraft limit so their balances can go negative. They are bootstrapped idempotently at startup by `handlers::cards::ensure_system_accounts()` and their UUIDs are re-resolved per request (not cached in AppState) because a `testing/cleanup.sh` run wipes and rebuilds them.
+System accounts (`VISA_CLEARING`/`BANK_SETTLEMENT` under `system@nano.bank`,
+plus per-rail clearing/settlement accounts) carry a $1T overdraft, are
+bootstrapped idempotently at startup, and are re-resolved per request because
+`testing/cleanup.sh` rebuilds them.
 
 ### Enum serialisation quirk
 
-`KycStatus` and similar enums use `#[sqlx(rename_all = "snake_case")]` for DB mapping but have no serde rename attribute, so JSON output is PascalCase (e.g. `"Pending"`, not `"pending"`).
-
-### Configuration
-
-`api/config/default.toml` is the source of truth for local dev credentials. The `database.host` is `::1` (IPv6 loopback) because `kubectl port-forward` creates a dead `0.0.0.0:5432` mapping — IPv4 connections are reset by the Kind/Docker proxy.
-
-### What is and isn't implemented
-
-Implemented handlers (real SQL + logic):
-- `POST /api/v1/customers` — `handlers/customers.rs`
-- `POST /api/v1/accounts` — `handlers/accounts.rs`
-- `POST /api/v1/cards/authorize|capture|settle` — `handlers/cards.rs`
-- `POST /api/v1/transactions/deposit|withdrawal|transfer`, `GET /api/v1/transactions` — `handlers/transactions.rs`
-- `POST /api/v1/interac/*` — Interac e-Transfer rail — `handlers/interac.rs` (see "Interac e-Transfer rail" below)
-- `GET /health`, `GET /docs`
-
-Everything else (`auth`, `security`, GET endpoints for customers/accounts) returns a static `"... endpoint - TODO: implement"` string.
+Enums like `KycStatus` use `#[sqlx(rename_all = "snake_case")]` but no serde
+rename, so JSON is PascalCase (`"Pending"`).
 
 ### Bruno collection
 
-Bruno `.bru` files require `body: json` and `auth: inherit` declared **inside the `post {}` block** alongside the URL — without those, Bruno ignores the `body:json {}` content block entirely. See the working `_2` files in `bruno/` for the correct format Bruno generates from its own UI.
+Bruno `.bru` files need `body: json` and `auth: inherit` **inside the `post {}`
+block** next to the URL, or Bruno ignores `body:json {}`. Copy the working
+`_2` files in `bruno/`.
 
-### Testing
+### Config
 
-No Rust tests exist. The test harness is three Python containers in `testing/`:
-- `generator/generate_customers.py` — seeds fake Canadian customers and accounts via the API
-- `visa/visa_simulator.py` — drives the full authorize → capture → settle loop
-- `viewer/app.py` — Streamlit live dashboard on port 8504
-# CLAUDE.md — nano-bank
-
-Guidance for working in this repo. nano-bank is a toy challenger-bank backend
-(Rust/axum over PostgreSQL on a local Kind cluster). This file focuses on the
-parts that aren't obvious from the code.
+Layers: `api/config/default.toml` → `config/{RUN_MODE}.toml` →
+`config/local.toml` → env vars `NANO_BANK__SECTION__KEY`. `CORE_BACKEND`,
+`MODERN_CORE_URL`, `LEGACY_CORE_URL` are read directly. `default.toml` is the
+source of truth for local dev credentials; `database.host` is `::1` on purpose.
 
 ## Big picture: the kernel split
 
@@ -148,7 +131,16 @@ either backend's account scheme.
   (`/api/v1/customers/interac-recipients`), an address book distinct from the
   Interac rail; sending still goes through `/api/v1/interac/etransfers`.
 - `k8s/` — Kind cluster + Postgres manifests.
-- `testing/` — a 3-container harness (data generator + payment-network sim + viewer).
+- `api/src/fraud/` — the `FraudCheck` port (`mod.rs`), the engine adapter
+  (`engine.rs`), the no-op, and the screening gate (`gate.rs`).
+- `api/src/rails/` — the `Rail` port and per-rail system accounts.
+- `api/src/handlers/back_office.rs` — read-only service-token plane the CRM and
+  the C-suite consume; `ops_levers.rs` — the COO's write levers.
+- `testing/` — data generator, Visa/Interac/AFT/Lynx simulators, Streamlit
+  viewer (`:8504`), smoke/verify scripts.
+- `ceo/ cfo/ coo/ cto/ cxo/ coder/` on the shared `csuite/` harness, using the
+  domain MCP servers in `finance/`, `operations/`, `platform_mcp/`, `cx/`.
+- `ui/` — Next.js customer app (`:3000`); `demos/` — guided demos.
 - `agent/` — the Python **personal manager**: a GLM/Ollama-cloud LangGraph agent
   behind a customer-scoped MCP gateway (DB reads + Qdrant memory + two-phase,
   confirm-gated money movement), plus a skill system and Interac saved-payees +
@@ -371,13 +363,80 @@ the service token is minted from the network client secret):
 0 3 1 * *  curl -fsS -XPOST "$API/api/v1/finance/capitalise"  -H "authorization: Bearer $SVC" -H 'content-type: application/json' -d "{\"period\":\"$(date -d 'last month' +\%Y-\%m)\"}"
 ```
 
+## Fraud engine: the FraudCheck port
+
+`api/src/fraud/` mirrors the Ledger pattern: a `FraudCheck` trait with an HTTP
+adapter for `nano-bank-fraud-engine` (`:8092`) and a no-op, chosen by
+`[fraud] backend` / `NANO_BANK__FRAUD__BACKEND` — default **`off`** (also the
+kill switch), so tests and local runs don't need the engine.
+
+- **Call `fraud::gate::screen()` before opening the DB transaction** in any new
+  customer- or agent-initiated money path — never hold row locks across the
+  network call. It mints the `operation_id`, recovers session context, and maps
+  the decision to an outcome.
+- The engine (`POST /v1/decisions`) returns an **action, not a score**:
+  `allow | block | hold_review | challenge | delay_and_warn` (the last two
+  collapse to under-review for now). Declines are opaque to customers
+  (`TRANSACTION_DECLINED` / `TRANSACTION_UNDER_REVIEW`).
+- A **hold is a success value** (`Screened`), not an `Err`, so a caller can park
+  the movement; callers that can't park use `Screened::into_refusal`. Customers
+  follow a held movement at `GET /api/v1/reviews/:id`; the bank asks
+  `GET /v1/decisions/{operation_id}/disposition` for the case outcome.
+- **Failure matrix:** `timeout_ms` (150) + a circuit breaker. Engine
+  unreachable → amounts ≤ `fail_closed_above` ($1,000) fail **open** (proceed,
+  then `POST /v1/rescore`), larger ones fail **closed** (503). Telemetry
+  failures never open the decisions breaker.
+- **Agency is spec-derived:** passing agent context sets channel
+  `agentic_branch`; never infer it from the auth plane.
+- Auditing a refusal is the **caller's** job (the agent plane already records
+  it); don't add a second writer in the gate.
+- Refused agent actions go to an outbox delivered to `POST /v1/outcomes` by
+  `POST /api/v1/fraud/admin/flush-denials` (CronJob
+  `k8s/fraud-denial-drainer-cronjob.yaml`). Money rows carry the engine link in
+  metadata, exposed at `/api/v1/fraud/admin/transactions/:id/fraud-link` and
+  `/admin/rails/:rail/:rail_id/fraud-link`.
+- `x-simulated-time` (`fraud/simulated_time.rs`) is honoured only when
+  `fraud.accept_simulated_time = true` (default false) — it exists for the world
+  model's replays.
+- `service_token` must equal the engine's `FRAUD_ENGINE__AUTH__SERVICE_TOKEN`.
+  Integration test: `api/tests/fraud_port.rs`.
+
+## CRM integration (`nano-bank-crm`)
+
+- **CRM → bank:** the CRM mints a service token
+  (`POST /api/v1/auth/service-token`) and reads `/api/v1/back-office/*`.
+  Keep that plane **read-only**; contacts match customers **by email**. The CRM
+  runs on `PORT=3100` next to the bank UI on 3000.
+- **COO → CRM:** `operations/crm_client.py` + the
+  `execute_provision_crm_mandate` MCP lever call the CRM's
+  `POST /api/agent/provision` (get-or-create contact + one-customer mandate).
+  Env: `CRM_BASE_URL`, `CRM_TENANT_SLUG`, `CRM_PROVISIONING_TOKEN` (= the CRM's
+  `CO_PROVISIONING_TOKEN`; the config refuses to start without it).
+- **Personal manager → CRM** is planned
+  (`docs/superpowers/plans/2026-08-30-personal-manager-crm-access.md`): the
+  manager only looks up / mints tokens against existing mandates and reaches the
+  CRM's generated MCP tools as a second MCP server. It must never call
+  provision, and its own MCP tools must never take a customer id or token.
+
+## World model (`nano-bank-world-model`)
+
+Replays labelled synthetic traffic against the live bank
+(`world-model realize --bank-url http://localhost:8081 --engine-url
+http://localhost:8092`), reconciles the GL (the hard gate), reads fraud links
+back from the bank's fraud-admin endpoints, and posts ground truth to the
+engine's `/v1/outcomes`. It never asks the engine to decide — decisions stay
+the bank's. Changes to the fraud-link endpoints or the simulated-time header
+break it.
+
 ## Gotchas
 
 - **DB host is `::1`, not `127.0.0.1`** (dead docker-proxy on IPv4).
-- The repo has no card accounts seeded by default — only two system GL accounts.
+- No card accounts are seeded by default — only system GL accounts.
   Create a `credit_card` account (status `active`, an `overdraft_limit` as the
   credit limit, `available_balance` = the limit) to exercise the card rails.
 - Config is layered: `api/config/default.toml` plus env vars with prefix
   `NANO_BANK` and `__` as the separator (e.g. `NANO_BANK__SERVER__PORT=8082` to
   run a second instance alongside one already holding `:8081`).
-- Remaining stub handlers: `auth`, `security` (and some GET endpoints).
+- Remaining stub handlers: KYC document upload
+  (`POST /customers/kyc/documents`) and `security/*` (sessions, devices, trust).
+- Start a core before the API or every posting returns 503.
