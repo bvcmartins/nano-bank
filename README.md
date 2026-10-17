@@ -2,275 +2,329 @@
 
 > Why not vibe-coding a bank?
 
-A toy challenger-bank core, built to explore what a production-shaped banking
-backend looks like end to end: a **Rust API** on top of a **double-entry
-PostgreSQL** schema, running on a local **Kind (Kubernetes-in-Docker)** cluster.
+A toy Canadian challenger bank, built to explore what a production-shaped banking
+stack looks like end to end: a **Rust (axum) API** over a **double-entry
+PostgreSQL** subledger on a local **Kind** cluster, posting its general ledger to
+a swappable **core** service, screening every money movement through an external
+**fraud engine**, and operated by a set of **LLM agents** (a personal manager and
+an agentic C-suite).
 
 > [!WARNING]
-> This is a learning/experimental project — **not** for handling real money.
-> The database schema is substantial and the infrastructure works, but most API
-> handlers are still stubs (they return `"... endpoint - TODO: implement"`).
-> Default credentials and the JWT secret are committed in plaintext for local
-> dev convenience. Don't deploy this anywhere real.
+> Learning/experimental project — **not** for handling real money. Default
+> credentials, the JWT secret and service tokens are committed in plaintext for
+> local dev convenience. Don't deploy this anywhere real.
 
-## Architecture
+## The ecosystem
 
-```
-┌──────────────────────────────┐
-│  Rust API  (axum)            │   http://localhost:8081
-│  JWT auth · Decimal money    │
-└───────────────┬──────────────┘
-                │  sqlx (port-forward :5432)
-┌───────────────▼──────────────┐
-│  PostgreSQL 16               │   in a Kind cluster, namespace `nano-bank`
-│  double-entry bookkeeping    │   init Job loads the DDL on first boot
-└──────────────────────────────┘
-```
-
-## Pluggable accounting core (the Ledger port)
-
-The general-ledger posting is being split out behind a backend-agnostic
-**`Ledger` port** (`src/ledger/`), so nano-bank can post to either of two
-interchangeable core services, chosen at startup by `CORE_BACKEND`:
+nano-bank is the hub of six sibling repositories. It owns customers, accounts,
+the payment rails and the per-account subledger; everything else plugs in through
+a narrow port or a service-token API.
 
 ```
-handlers/ledger.rs  ──►  Ledger (trait, neutral Account/Direction/Decimal)
-                          ├── ModernLedger ──HTTP──►  nano-bank-modern-core :8091 (Rust)
-                          └── LegacyLedger ──HTTP──►  nano-bank-legacy-core  :8090 (Java)
+                        ┌──────────────────────────┐
+                        │  nano-bank-world-model   │  synthetic population + fraud
+                        │  (Python, offline/replay)│  typologies, ground-truth labels
+                        └─────┬───────────────┬────┘
+            realize: drives   │               │  ground truth:
+            the bank's APIs   │               │  POST /v1/outcomes
+                              ▼               ▼
+┌──────────────────┐   ┌─────────────────────────────┐   FraudCheck port   ┌──────────────────────────┐
+│ nano-bank-crm    │──►│  nano-bank  (this repo)     │────────────────────►│ nano-bank-fraud-engine   │
+│ (TS, :3000/3100) │   │  Rust API :8081             │  /v1/decisions      │ (Python, :8092)          │
+│ back-office reads│◄──│  rails · subledger · agents │  /v1/rescore …      │ rules → policy → action  │
+│ agent mandates   │   └─────────────┬───────────────┘                     └──────────────────────────┘
+└──────────────────┘                 │  Ledger port (CORE_BACKEND)
+        ▲ COO lever:                 ├──────────────────────┐
+        │ provision mandate          ▼                      ▼
+        │                ┌───────────────────────┐ ┌────────────────────────┐
+   operations MCP        │ nano-bank-modern-core │ │ nano-bank-legacy-core  │
+                         │ Rust GL, :8091        │ │ Java ERP-style, :8090  │
+                         └───────────────────────┘ └────────────────────────┘
 ```
 
-The port speaks semantic accounts (`bank`, `receivable`, `revenue`, …); each
-adapter maps them onto its backend's numbering. One representative flow is wired
-through it today:
+| Repo | Role | How nano-bank talks to it |
+|------|------|---------------------------|
+| [`nano-bank-modern-core`](../nano-bank-modern-core) | Clean Rust general ledger (`journal_entry`/`journal_line`, REST) | `ModernLedger` adapter, `CORE_BACKEND=modern` (default), `MODERN_CORE_URL` |
+| [`nano-bank-legacy-core`](../nano-bank-legacy-core) | Cleanroom ERP-style document-posting core (Java/Spring; REST, SOAP, OData, IDoc) | `LegacyLedger` adapter, `CORE_BACKEND=legacy`, `LEGACY_CORE_URL` |
+| [`nano-bank-fraud-engine`](../nano-bank-fraud-engine) | Real-time transaction risk decisioning (hard gates → soft signals → policy table) | `FraudCheck` port, `NANO_BANK__FRAUD__BACKEND=engine` |
+| [`nano-bank-crm`](../nano-bank-crm) | Metadata-driven CRM where AI agents are principals under mandates | CRM reads nano-bank's **back-office** plane; the COO agent provisions CRM mandates |
+| [`nano-bank-world-model`](../nano-bank-world-model) | Simulation that generates a labelled fraud corpus and replays it against the live bank | Drives nano-bank's customer/rail APIs; feeds ground truth to the fraud engine |
+
+### Core banking: the Ledger port (legacy-core ↔ modern-core)
+
+General-ledger posting is backend-agnostic. Handlers post through a small
+`Ledger` trait (`api/src/ledger/`) that speaks **semantic** accounts (`bank`,
+`receivable`, `payable`, `revenue`, `customer_deposits`, `interest_income`, …),
+a `Direction` (`debit`/`credit`) and `Decimal` money. Each adapter maps those onto
+its backend:
+
+```
+handlers  ──►  Ledger (trait)
+                 ├── ModernLedger ──HTTP──►  modern core :8091   POST /entries, GET /balances   (GL codes BANK, AR, AP, …)
+                 └── LegacyLedger ──HTTP──►  legacy core :8090   /api/v1/documents, /api/v1/gl-balances
+                                                                 (0000xxxxxx accounts, S/H indicator, company code 1000)
+```
+
+The adapter is chosen once at startup:
 
 ```bash
-# CORE_BACKEND=modern (default) MODERN_CORE_URL=http://localhost:8091
-# CORE_BACKEND=legacy          LEGACY_CORE_URL=http://localhost:8090
+CORE_BACKEND=modern MODERN_CORE_URL=http://localhost:8091   # default
+CORE_BACKEND=legacy LEGACY_CORE_URL=http://localhost:8090
+```
+
+The **subledger vs GL split**: nano-bank keeps per-account balances, holds and
+limits locally (`transactions` / `transaction_entries`, enforced by triggers);
+the core is the GL of record and only sees **aggregate** postings. Every GL post
+happens *inside* the local DB transaction before commit, so if the core can't
+record it the operation fails (503) instead of letting the two drift. Postings
+are wired for cards (capture/settle, interchange), deposits/withdrawals, all
+three external rails, the interest/NIM engine and fees, and lending. Transfers
+between customers are local-only (net-zero GL effect).
+
+Both cores carry the same chart, including the bank-economics and accrued-interest
+GL accounts used by the finance engine, so the same request lands in either:
+
+```bash
 curl -X POST localhost:8081/api/v1/ledger/journal -H 'content-type: application/json' -d '{
-  "lines":[
-    {"account":"bank","direction":"debit","amount":250.00},
-    {"account":"revenue","direction":"credit","amount":250.00}
-  ]}'
+  "lines":[{"account":"bank","direction":"debit","amount":250.00},
+           {"account":"revenue","direction":"credit","amount":250.00}]}'
 curl localhost:8081/api/v1/ledger/balances
 ```
 
-The same request posts to whichever core is configured.
+`testing/verify-gl-expansion.sh` and `testing/verify-nim-engine.sh` are
+cross-backend smoke tests — run them once per `CORE_BACKEND`.
 
-### Cards post their GL to the core
+### Fraud engine: the FraudCheck port
 
-The card rails (`cards.rs`) route their **aggregate general-ledger** effect
-through the same port: `capture` posts *debit Receivable / credit Payable* and
-`settle` posts *debit Payable / credit Bank* to the configured core, with the
-core's document id recorded in `transactions.metadata.gl_entry`. The **per-card
-subledger** (balance, holds, available credit) stays local — the core is the GL
-of record, while nano-bank keeps the subledger that enforces credit limits. The
-GL post happens inside the capture/settle transaction, so if the core can't
-record it the operation fails rather than letting the ledger drift.
+`api/src/fraud/` mirrors the Ledger pattern: a `FraudCheck` trait with an HTTP
+`EngineFraudCheck` adapter and a no-op, selected by `[fraud] backend`
+(default **`off`**, which is also the operational kill switch).
 
-`transactions.rs` (deposit/transfer/withdrawal) is still stubbed and not yet
-routed through the port.
+- **Screening** — every customer- or agent-initiated money movement calls
+  `fraud::gate::screen()` **before** its DB transaction opens (no row locks
+  across a network call) → `POST /v1/decisions`. The engine returns an *action*,
+  never a score: `allow`, `block`, `hold_review`, `challenge`, `delay_and_warn`
+  (the last two currently collapse to under-review).
+- **Declines are opaque** to the customer (`TRANSACTION_DECLINED` /
+  `TRANSACTION_UNDER_REVIEW`). A **hold** parks the movement; the customer can
+  follow it via `GET /api/v1/reviews/:id`, and the bank asks the engine for the
+  case outcome via `GET /v1/decisions/{operation_id}/disposition`.
+- **Failure matrix** — 150 ms budget and a circuit breaker. If the engine is
+  unreachable, amounts ≤ `fail_closed_above` ($1,000) **fail open** (proceed,
+  then `POST /v1/rescore`); larger amounts **fail closed** (503).
+- **Agent context** — agent-initiated movements carry the agent id, mandate id
+  and step-up/cap-override details, and are tagged channel `agentic_branch`.
+- **Denial feedback** — refused agent actions are written to an outbox and
+  delivered to `POST /v1/outcomes` by `POST /api/v1/fraud/admin/flush-denials`,
+  driven by `k8s/fraud-denial-drainer-cronjob.yaml` every 5 minutes.
+- **Linking** — the money row's metadata stores the engine's `operation_id` /
+  `decision_id`; `GET /api/v1/fraud/admin/transactions/:id/fraud-link` (and the
+  per-rail variant) exposes it for reconciliation.
 
-| Component | Tech |
-|-----------|------|
-| API server | Rust, [axum](https://github.com/tokio-rs/axum) 0.7, tokio |
-| Database access | [sqlx](https://github.com/launchbadge/sqlx) 0.7 (Postgres) |
-| Auth | JWT (`jsonwebtoken`), password hashing with `argon2` |
-| Money | `rust_decimal` — no floats for currency |
-| Database | PostgreSQL 16, double-entry ledger |
-| Orchestration | Kind + Kubernetes manifests under `k8s/` |
+```toml
+# api/config/default.toml  (override with NANO_BANK__FRAUD__*)
+[fraud]
+backend = "off"                       # "engine" to screen
+engine_url = "http://localhost:8092"
+timeout_ms = 150
+fail_closed_above = "1000.00"
+service_token = "dev-service-token"   # = engine's FRAUD_ENGINE__AUTH__SERVICE_TOKEN
+outcomes_timeout_ms = 2000
+```
+
+The engine's own admin plane (`/admin/v1/*` — lists, review cases, policy and
+rules activations) runs on a separate credential; see its README and
+`design/INTEGRATION_DESIGN.md` there for the full contract.
+
+### CRM: back-office plane + agent mandates
+
+Two directions of integration with [`nano-bank-crm`](../nano-bank-crm):
+
+1. **CRM → bank (reads).** The CRM is a back-office consumer. It mints a service
+   token (`POST /api/v1/auth/service-token`) and reads across customers via the
+   read-only **`/api/v1/back-office/*`** plane (customers, accounts, balances,
+   transactions, plus `ops/*` views). Contacts are matched to bank customers **by
+   email**. When the bank is down the CRM degrades to cached figures with a
+   `bank unavailable` banner. In the CRM:
+   ```bash
+   BANKING_DRIVER=live NANO_BANK_URL=http://localhost:8081 \
+   NANO_BANK_CLIENT_SECRET=nano-bank-visa-network-secret-change-me \
+   PORT=3100 pnpm dev        # 3100: the bank's own UI already uses 3000
+   ```
+2. **Bank agents → CRM (mandates).** The COO's operations MCP server
+   (`operations/crm_client.py`) exposes the `execute_provision_crm_mandate`
+   lever, which calls the CRM's `POST /api/agent/provision` to get-or-create a
+   CRM contact and a mandate scoped to one customer, so the **personal manager**
+   can read and log CRM activity through the CRM's own generated MCP tools. The
+   manager only looks up and mints tokens against existing mandates; provisioning
+   is the COO's call. Configure with `CRM_BASE_URL`, `CRM_TENANT_SLUG`,
+   `CRM_PROVISIONING_TOKEN` (must match the CRM's `CO_PROVISIONING_TOKEN`). The
+   manager-side consumer is planned in
+   `docs/superpowers/plans/2026-08-30-personal-manager-crm-access.md`.
+
+### World model: synthetic traffic and ground truth
+
+[`nano-bank-world-model`](../nano-bank-world-model) simulates a Canadian
+retail-bank population with injected fraud typologies (ATO, APP scam, mule,
+first-party, synthetic ID, agentic abuse, AML patterns) and benign confounders.
+
+- **Generate** — offline: writes a labelled corpus (`intents.parquet`,
+  `outcome_events.parquet`, …) in the fraud engine's field vocabulary.
+- **Realize** — replays a scenario against a running nano-bank, moving money
+  through every rail, then reconciles the GL; the exit code is non-zero unless it
+  reconciles:
+  ```bash
+  uv run world-model realize --scenario scenarios/hero.yaml \
+      --bank-url http://localhost:8081 --engine-url http://localhost:8092 \
+      --run-tag demo-1 --out ./realized
+  ```
+- **Simulated time** — the world model dates requests with an
+  `x-simulated-time` header so fraud velocity is measured at the simulated
+  instant. nano-bank honours it only when
+  `NANO_BANK__FRAUD__ACCEPT_SIMULATED_TIME=true` (off by default).
+- **Closing the loop** — it reads back the bank's fraud link per transaction
+  (`/api/v1/fraud/admin/.../fraud-link`) and posts ground-truth labels to the
+  engine's `/v1/outcomes`. The fraud summary is observational: decisions are
+  still the bank's (via the engine), never the world model's.
+
+## What's in this repo
+
+| Area | What it is |
+|------|-----------|
+| **Accounts & money** | Customers, chequing/savings/credit-card accounts, deposit / withdrawal / transfer (idempotent), per-account limits and daily summaries |
+| **Cards** | Issuer rails: authorize (hold) → capture → settle, interchange recognized at capture |
+| **Interac e-Transfer** | Send, autodeposit, claim (security Q&A, 3-strike lock), decline, cancel, expiry sweep, saved payees, notification outbox + drainer CronJob |
+| **AFT / EFT** | Batch rail over ACSS: direct-deposit credits, PAD debits under mandates, CPA-005-style files, settlement, NSF rejects, returns |
+| **Lynx** | High-value RTGS wires with finality: pacs.008/009, camt.056/029 recalls (ISO 20022, round-trippable) |
+| **Finance / NIM** | Daily ACT/365 accrual, monthly capitalisation, maintenance and e-transfer fees, tagged by product/cost-centre |
+| **Lending** | Loan applications, disbursement, repayment, interest accrual |
+| **Agentic banking** | Agent registration, customer-granted **mandates** (scoped, capped, expiring, revocable), mandate-scoped agent API, step-up approvals for over-cap transfers, agent action ledger, consent UI at `/app` |
+| **Back office & ops** | Service-token cross-customer reads, ops views (float, rails, exceptions, cards, declines), ops levers (cut AFT batch, sweep e-transfers, reject stale wires, flush notifications) |
+| **Personal manager** (`agent/`) | GLM/Ollama-cloud LangGraph agent behind a customer-scoped MCP gateway, confirm-gated money movement, Qdrant memory. A2A API `:8086`, console `:8505` |
+| **Agentic C-suite** | `ceo/`, `cfo/`, `coo/`, `cto/`, `cxo/`, `coder/` agents on a shared `csuite/` harness with grounded-number verification; domain MCP servers in `finance/`, `operations/`, `platform_mcp/`, `cx/` |
+| **UI** (`ui/`) | Next.js customer app on `:3000` (demo login `demo@nano.bank` / `Demo-Pass-2026`) |
+| **Demos** (`demos/`) | Ten guided demos from onboarding to the CEO boardroom — see [`demos/README.md`](demos/README.md) |
+
+Not yet implemented: KYC document upload and the `security/*` endpoints
+(sessions, devices, device trust) still return `TODO` stubs.
 
 ## Repository layout
 
 ```
 nano-bank/
-├── api/                     # Rust API server (axum)
-│   ├── src/
-│   │   ├── main.rs          # router, middleware (CORS, compression, timeout), startup
-│   │   ├── config/          # settings + database pool / health check / migration check
-│   │   ├── handlers/        # route handlers: auth, customers, accounts, transactions,
-│   │   │                    #   security, health, docs  (mostly TODO stubs)
-│   │   ├── models/          # domain models (customer, account, transaction, security)
-│   │   ├── middleware/  errors/  repositories/  services/  utils/
-│   │   └── ...
-│   └── config/default.toml  # default config (DB, server, JWT, security, logging)
-├── src/core/tables/         # PostgreSQL DDL (the real substance of the schema)
-│   ├── 00_init.sql … 06_triggers.sql
-│   └── README.md            # schema docs
-├── k8s/                     # Kind cluster config + Postgres manifests + init Job
-│   ├── deploy.sh
-│   └── README.md            # k8s setup docs
-├── setup-k8s.sh             # one-time host setup (Docker perms, tool checks)
-├── start-nano-bank.sh       # bring everything up
-└── stop-nano-bank.sh        # tear everything down (deletes the cluster)
+├── api/                 # Rust API (axum 0.7, sqlx, rust_decimal, argon2, JWT)
+│   ├── src/handlers/    # one module per area (cards, interac, aft, lynx, finance, loans, agents, …)
+│   ├── src/ledger/      # Ledger port + modern/legacy adapters
+│   ├── src/fraud/       # FraudCheck port, engine adapter, screening gate
+│   ├── src/rails/       # Rail port (hold/release/refund/accept_inbound) + per-rail system accounts
+│   ├── src/aft/ src/lynx/  # CPA-005 and ISO 20022 codecs
+│   ├── tests/           # integration tests (need the DB)
+│   └── config/default.toml
+├── src/core/tables/     # PostgreSQL DDL 00–16, loaded by the Kind init Job
+├── k8s/                 # Kind config, Postgres, bank-api, CronJobs, cross-cluster core wiring
+├── agent/               # personal manager (LangGraph + MCP)
+├── ceo/ cfo/ coo/ cto/ cxo/ coder/ csuite/   # agentic C-suite
+├── finance/ operations/ platform_mcp/ cx/    # domain MCP servers the officers use
+├── ui/                  # Next.js customer app
+├── demos/               # guided demos
+├── testing/             # data generator, Visa/Interac/AFT/Lynx simulators, Streamlit viewer, smoke scripts
+├── scripts/             # deploy-all, start/stop, e2e
+└── docs/                # specs and plans
 ```
 
 ## Getting started
 
-### Prerequisites
+Prerequisites: Docker, `kind`, `kubectl`, a Rust toolchain; Python/`uv` for the
+agents and simulators; Node for the UI.
 
-- **Docker** (running, with your user in the `docker` group)
-- **kubectl** and **kind** on your `PATH`
-- **Rust** toolchain (`cargo`)
-
-On first run, make sure the tools are reachable and Docker permissions are set:
+### Full stack in Kind
 
 ```bash
-export PATH="$HOME/bin:$PATH"
-./setup-k8s.sh
+./scripts/setup-k8s.sh     # one-time host setup
+./scripts/deploy-all.sh    # modern core (its own cluster) + Postgres + bank-api + agent
 ```
 
-### Start
+### Local inner loop
 
 ```bash
-./start-nano-bank.sh
+# 1. Database (Kind) — note: the API connects on IPv6 ::1, not 127.0.0.1
+./k8s/deploy.sh
+kubectl port-forward -n nano-bank svc/postgres-service 5432:5432 &
+
+# 2. A core — start it before the API, or every posting returns 503
+(cd ../nano-bank-modern-core && docker compose up -d)          # :8091
+# or: (cd ../nano-bank-legacy-core && ./start-core.sh)          # :8090
+
+# 3. Optional: the fraud engine
+(cd ../nano-bank-fraud-engine && ./start-engine.sh)            # :8092
+
+# 4. The API
+cd api && NANO_BANK__FRAUD__BACKEND=engine cargo run           # :8081
+curl -s localhost:8081/health
 ```
 
-This does three things:
+Config is layered: `config/default.toml` → `config/{RUN_MODE}.toml` →
+`config/local.toml` → env vars prefixed `NANO_BANK__` with `__` as separator
+(e.g. `NANO_BANK__SERVER__PORT=8082`). `CORE_BACKEND`, `MODERN_CORE_URL` and
+`LEGACY_CORE_URL` are read directly.
 
-1. Creates the `nano-bank` Kind cluster (if it doesn't already exist) and
-   deploys PostgreSQL via `k8s/deploy.sh`. An init Job loads the DDL scripts in
-   order (enums → customers → accounts → transactions → security → triggers).
-2. Port-forwards the in-cluster Postgres to `localhost:5432`.
-3. Builds and runs the Rust API (`cargo run`) on `http://localhost:8081`.
+## Ports
 
-### Stop
-
-```bash
-./stop-nano-bank.sh
-```
-
-Stops the API and port-forward, **deletes the Kind cluster** (and its data), and
-cleans up log files.
-
-## Services
-
-| Service      | URL                            |
-|--------------|--------------------------------|
-| API Server   | http://localhost:8081          |
-| Health Check | http://localhost:8081/health   |
-| API Docs     | http://localhost:8081/docs     |
-| PostgreSQL   | localhost:5432                 |
-
-## Logs
-
-The start script runs the API and port-forward in the background:
-
-```bash
-tail -f /tmp/nano-bank-api.log
-tail -f /tmp/nano-bank-port-forward.log
-```
+| Service | Port | Repo |
+|---------|------|------|
+| nano-bank API | 8081 | this repo (`api/`) |
+| nano-bank PostgreSQL | 5432 (NodePort 30432) | this repo, Kind |
+| nano-bank UI | 3000 | this repo (`ui/`) |
+| Personal manager API / console | 8086 / 8505 | this repo (`agent/`) |
+| Testing viewer | 8504 | this repo (`testing/viewer`) |
+| Legacy core | 8090 | `nano-bank-legacy-core` |
+| Modern core | 8091 (DB 5435) | `nano-bank-modern-core` |
+| Fraud engine | 8092 (DB 5436, Redis 6379) | `nano-bank-fraud-engine` |
+| CRM web | 3000 → use 3100 next to the bank UI (DB 5433) | `nano-bank-crm` |
 
 ## API overview
 
-Full HTML docs are served at `http://localhost:8081/docs`. Routes are namespaced
-under `/api/v1`:
+Full HTML docs at `http://localhost:8081/docs`. Under `/api/v1`:
 
-| Area | Endpoints |
-|------|-----------|
-| **Auth** | `POST /auth/login`, `/auth/refresh`, `/auth/logout` |
-| **Customers** | `POST /customers`, `GET`/`PUT /customers/profile`, `POST /customers/kyc/documents` |
-| **Accounts** | `GET`/`POST /accounts`, `GET /accounts/{id}`, `GET /accounts/{id}/balance` |
-| **Transactions** | `POST /transactions/transfer`, `/deposit`, `/withdrawal`, `GET /transactions` |
-| **Interac** | `POST`/`GET /interac/etransfers`, `POST /interac/etransfers/{id}/{claim,decline,cancel}`, `POST`/`GET /interac/autodeposit`, `POST /interac/network/inbound`, `POST /interac/network/etransfers/{id}/settle`, `POST /interac/admin/sweep-expired` |
-| **AFT/EFT** | `POST`/`GET`/`DELETE /aft/mandates`, `POST /aft/credits`, `POST /aft/debits`, `POST /aft/batches/{id}/submit`, `GET /aft/batches`, `GET /aft/entries`, `POST /aft/network/settle/{batch}`, `POST /aft/network/inbound-batch`, `POST /aft/network/returns` |
-| **Lynx** | `POST`/`GET /lynx/wires`, `GET /lynx/wires/{id}`, `POST /lynx/wires/{id}/recall`, `POST /lynx/network/wires/{id}/settle`, `POST /lynx/network/inbound`, `POST /lynx/network/recalls/{id}/resolve`, `POST /lynx/network/inbound-recall`, `POST /lynx/admin/reject-stale` |
-| **Security** | `GET /security/sessions`, `GET /security/devices`, `POST /security/devices/trust` |
-| **System** | `GET /health`, `GET /docs` |
+| Area | Prefix |
+|------|--------|
+| Auth (customer login/refresh/logout, service token, agent token) | `/auth` |
+| Customers, saved Interac recipients | `/customers` |
+| Accounts | `/accounts` |
+| Transactions | `/transactions` |
+| Cards | `/cards` |
+| Interac / AFT / Lynx | `/interac`, `/aft`, `/lynx` |
+| Ledger (via port) | `/ledger` |
+| Finance (accrue, capitalise) | `/finance` |
+| Loans | `/loans` |
+| Agents, mandates, mandate-scoped agent API, approvals, agent ledger | `/agents`, `/mandates`, `/agent`, `/approvals`, `/agent-ledger` |
+| Fraud reviews / fraud admin | `/reviews`, `/fraud` |
+| Back office and ops levers (service token) | `/back-office`, `/ops-levers` |
+| Security (stubbed) | `/security` |
 
-> Most handlers are placeholders today — the routing, middleware, config, and
-> database layers are wired up, but business logic for transactions, accounts,
-> etc. still needs implementing. See [Implementation status](#implementation-status).
+Auth planes: **customer** JWTs for customer endpoints; a **service** token
+(client-credentials, `security.service_client_secret`) for network, admin and
+back-office endpoints; short-lived **agent** tokens bound to a mandate.
 
-## Implementation status
-
-### ✅ Implemented
-
-**Infrastructure & data layer**
-
-- Kind cluster config and PostgreSQL Kubernetes manifests (`k8s/`), with an init
-  Job that loads the DDL on first boot
-- `setup-k8s.sh` / `start-nano-bank.sh` / `stop-nano-bank.sh` lifecycle scripts
-- Full **double-entry PostgreSQL schema** (`src/core/tables/`, `00`–`06`):
-  enums, customers, accounts, transactions + entries, security/audit tables, and
-  trigger-based balance validation
-
-**API server scaffolding** (`api/`)
-
-- axum router with all `/api/v1` routes mounted
-- Middleware stack: CORS, gzip/brotli compression, 30s request timeout, 10 MB
-  body limit, structured tracing
-- Configuration loading (`config` + `default.toml` + env overrides, `RUN_MODE`)
-- Database connection pool with startup health check and a table-existence
-  migration check
-- Domain **models** as typed Rust structs: customer, account, transaction,
-  security
-- Centralized **error handling** module
-
-**Working endpoints**
-
-- `GET /health` — real database-backed health check
-- `GET /docs` — HTML API documentation
-
-### 🚧 Not yet implemented
-
-**Handler business logic** — routes exist but return `"... endpoint - TODO:
-implement"`:
-
-- **Auth** — `login`, `refresh`, `logout` (JWT issuance/validation, argon2
-  password verification, session handling)
-- **Customers** — create, get/update profile, KYC document upload
-- **Accounts** — list, create, get details, get balance
-- **Transactions** — transfer, deposit, withdrawal, history (wired to the
-  double-entry ledger)
-- **Security** — sessions, devices, device trust
-- The `repositories/`, `services/`, `middleware/`, and `utils/` modules are
-  empty placeholders awaiting these implementations
-
-**Planned subsystems** (not yet started):
-
-- **CRM** — customer relationship management: contact/interaction history,
-  support tickets/cases, segmentation, communications, and lifecycle tracking on
-  top of the existing customer records
-- **Fraud** — real-time fraud detection and prevention: transaction risk
-  scoring, rules engine, velocity/anomaly checks, alerts and case management,
-  building on the security/monitoring tables already in the schema
-- **Agentic Governance** — guardrails and oversight for AI/agent-driven actions:
-  policy enforcement, human-in-the-loop approvals, action audit trails, and
-  explainability for any automated decisioning in the bank
-
-## Database
-
-The schema is the most developed part of the project. See
-[`src/core/tables/README.md`](src/core/tables/README.md) for full details.
-Highlights:
-
-- **Double-entry bookkeeping** via a `transaction_entries` table with
-  balance-validation triggers
-- **Canadian compliance** flavor: CAD currency, postal-code / SIN validation,
-  provincial codes, KYC/AML fields
-- **Audit trails** and **security monitoring** (sessions, device fingerprinting,
-  failed-login tracking, configurable risk rules)
-- Extensive check / FK / unique constraints and a deliberate indexing strategy
-
-### Connecting directly
-
-With the port-forward running (default from `start-nano-bank.sh`):
+## Testing
 
 ```bash
-psql -h localhost -p 5432 -U nanobank_user -d nano_bank_db
-# password: secure_nano_password_2024!   (local dev only)
+cd api && cargo test                 # integration tests (DB must be up)
+testing/run-testing.sh               # generator + rail simulators + viewer
+testing/transactions_smoke.sh        # REST smoke
+testing/cleanup.sh [--dry-run]       # wipe customer data (system GL accounts self-heal)
 ```
 
-The k8s manifests also expose a NodePort on `30432`. See
-[`k8s/README.md`](k8s/README.md) for cluster management commands.
+The Python packages (`agent/`, `csuite/`, officers, MCP servers) each have a
+`tests/` directory run with `pytest`. CI is in `.github/workflows/ci.yml`.
 
-## Configuration
+## More docs
 
-Defaults live in [`api/config/default.toml`](api/config/default.toml) and cover
-the database connection, server bind address (`0.0.0.0:8081`), JWT settings,
-security policy (login attempts, lockout, session timeout), and logging.
-`RUN_MODE` selects the environment; settings can be overridden via environment
-variables (the app uses `config` + `dotenvy`).
+- [`CLAUDE.md`](CLAUDE.md) and [`api/CLAUDE.md`](api/CLAUDE.md) — internals and gotchas
+- [`src/core/tables/README.md`](src/core/tables/README.md) — schema
+- [`k8s/README.md`](k8s/README.md) — cluster
+- [`agent/README.md`](agent/README.md) — personal manager
+- [`docs/specs/`](docs/specs) — rail, finance and fraud design specs
 
 ## License
 
